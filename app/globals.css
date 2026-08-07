@@ -1,0 +1,89 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+:root {
+  color-scheme: light dark;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------------------------------------------------------------------------
+   Kotlin Playground 的样式收敛
+   playground 会把 <code> 替换成一整套自己的 DOM，这里只做必要的边界修正，
+   避免它撑破正文容器或与 prose 排版打架。
+--------------------------------------------------------------------------- */
+.kotlin-runnable .executable-fragment-wrapper {
+  margin: 0;
+}
+
+.kotlin-runnable .code-area {
+  font-size: 0.85rem;
+}
+
+/* playground 未初始化前（脚本加载中或加载失败）的静态兜底样式 */
+.kotlin-runnable > code.kotlin-code {
+  display: block;
+  padding: 1rem;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  tab-size: 4;
+}
+
+/* 正文里的行内代码：加一层底色，和周围的中文正文拉开区分 */
+.prose :where(code):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
+  border-radius: 0.25rem;
+  background: rgb(15 23 42 / 0.07);
+  padding: 0.1rem 0.35rem;
+  font-weight: 500;
+  font-size: 0.86em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose :where(code):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
+    background: rgb(255 255 255 / 0.1);
+  }
+}
+
+/* Callout / Quiz 内部的富文本：让 MDX 段落在小容器里不要撑出多余间距 */
+.callout-body > :first-child,
+.quiz-explanation > :first-child {
+  margin-top: 0;
+}
+
+.callout-body > :last-child,
+.quiz-explanation > :last-child {
+  margin-bottom: 0;
+}
+
+.callout-body p,
+.quiz-explanation p {
+  margin: 0.5rem 0;
+}
+
+.callout-body code,
+.quiz-explanation code {
+  border-radius: 0.25rem;
+  background: rgb(0 0 0 / 0.06);
+  padding: 0.1rem 0.3rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .callout-body code,
+  .quiz-explanation code {
+    background: rgb(255 255 255 / 0.1);
+  }
+}

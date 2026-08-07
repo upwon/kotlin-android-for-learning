@@ -1,0 +1,22 @@
+<Callout type="note">
+**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
+如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.3 取消与超时」，
+由 Claude 产出这一章的 MDX 再替换本文件。
+</Callout>
+
+## 学习提纲
+
+- 取消是协作式的：isActive / ensureActive / yield
+- 不可取消的计算代码块
+- finally 中的清理与 NonCancellable
+- withTimeout / withTimeoutOrNull
+- Android 实战：页面销毁时的自动取消
+
+## 与 Java / Android 的关键差异
+
+和 Thread.interrupt 类似是协作式的，但结构化并发让取消可以沿树传播。
+
+## 官方参考
+
+- 官方中文：[cancellation-and-timeouts](https://book.kotlincn.net/text/cancellation-and-timeouts.html)
+- 官方英文：[cancellation-and-timeouts](https://kotlinlang.org/docs/cancellation-and-timeouts.html)

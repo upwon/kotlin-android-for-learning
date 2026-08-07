@@ -1,0 +1,22 @@
+<Callout type="note">
+**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
+如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 6.1 空安全深入（?. / ?: / !! / let）」，
+由 Claude 产出这一章的 MDX 再替换本文件。
+</Callout>
+
+## 学习提纲
+
+- 安全调用链与 `?.let {}`
+- Elvis `?:` 与提前返回 `?: return`
+- `!!` 的合理使用场景（几乎没有）
+- 平台类型 `String!`：来自 Java 的隐患
+- 可空集合的三种含义：`List<T>?` / `List<T?>` / `List<T?>?`
+
+## 与 Java / Android 的关键差异
+
+Android SDK 大量返回平台类型，注解不全时空安全会「漏气」。
+
+## 官方参考
+
+- 官方中文：[null-safety](https://book.kotlincn.net/text/null-safety.html)
+- 官方英文：[null-safety](https://kotlinlang.org/docs/null-safety.html)

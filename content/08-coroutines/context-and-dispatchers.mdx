@@ -1,0 +1,22 @@
+<Callout type="note">
+**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
+如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.5 协程上下文与调度器（Android 主线程 / IO）」，
+由 Claude 产出这一章的 MDX 再替换本文件。
+</Callout>
+
+## 学习提纲
+
+- Dispatchers.Main / IO / Default / Unconfined 的适用场景
+- withContext 切换线程
+- CoroutineContext 的元素组合（Job + Dispatcher + Name）
+- 主线程安全 main-safety：谁来负责切线程
+- Android 实战：Repository 内部 withContext(IO)
+
+## 与 Java / Android 的关键差异
+
+取代 Handler/Looper 与线程池的显式管理，但线程模型仍需心里有数。
+
+## 官方参考
+
+- 官方中文：[coroutine-context-and-dispatchers](https://book.kotlincn.net/text/coroutine-context-and-dispatchers.html)
+- 官方英文：[coroutine-context-and-dispatchers](https://kotlinlang.org/docs/coroutine-context-and-dispatchers.html)

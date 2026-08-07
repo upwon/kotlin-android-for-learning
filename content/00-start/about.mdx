@@ -1,0 +1,102 @@
+这个站是一条**为 Android 原生开发裁剪过的 Kotlin 学习路线**。
+它不是官方文档的翻译或镜像，而是按「一个有 Java / Android 底子的人该怎么最快把 Kotlin 学扎实」重新排的顺序。
+
+## 裁剪原则
+
+内容基于 Kotlin 官方文档，但做了三件事：
+
+- **砍掉**与 Android 原生无关的部分：Kotlin/Native、Kotlin/JS、Wasm、Spring、数据分析、竞赛编程。
+- **重排**顺序：把 Android 上每天要用的东西（集合、作用域函数、协程、sealed class、委托）提到显要位置。
+- **只讲差异**：默认你已经会 Java、懂 Android，所以不复述「什么是循环」「什么是接口」，
+  只讲 Kotlin 和 Java 不一样、以及一样但坑不一样的地方。
+
+## 两种页面：精讲与骨架
+
+| 标记 | 含义 |
+| --- | --- |
+| <span>精讲</span> | 内容已写完：概念 + 可运行示例 + 易错点 + 练习题 |
+| <span>骨架</span> | 已建好页面，列出了学习提纲和官方对照链接，正文待填 |
+
+全站 56 章的导航结构一次性建好了，可以随时点开看提纲；精讲内容按学习节奏逐章「点亮」。
+
+<Callout type="tip" title="怎么点亮新的一章">
+
+回到聊天会话里说「点亮 4.8 密封类」，让 Claude 按精讲模板产出这一章的 MDX，
+替换掉 `content/04-classes/sealed-classes.mdx`，push 即可。
+重新运行 `npm run gen` **不会**覆盖已经写过的文件。
+
+</Callout>
+
+## 页面里的三种交互元素
+
+### 1. 可运行代码块
+
+每段 Kotlin 示例都是**真的能跑的**——由 JetBrains 官方的 Kotlin Playground 驱动，
+可以直接改代码再点运行，编译在 JetBrains 的服务器上完成。
+
+```kotlin
+fun main() {
+    val versions = listOf("Java", "Kotlin")
+
+    // 随便改点什么，然后点右上角的 ▶
+    versions.forEachIndexed { index, name ->
+        println("${index + 1}. $name")
+    }
+}
+```
+
+不需要运行、只用来展示语法的片段会渲染成只读的形式：
+
+```kt
+// 这段只做展示，没有运行按钮
+val greeting: String get() = "Hello"
+```
+
+### 2. 提示框
+
+<Callout type="warn">
+
+⚠️ 标注的是**易错点**——从 Java 转过来最容易想当然的地方。
+
+</Callout>
+
+<Callout type="java">
+
+☕ 标注的是 **Java 对照**——同一件事在两边分别怎么写、为什么 Kotlin 这么设计。
+
+</Callout>
+
+<Callout type="success">
+
+✅ 标注的是可以直接带走的**结论**。
+
+</Callout>
+
+### 3. 练习题
+
+每篇精讲末尾有 3–5 道题，支持单选、多选和填空。提交后展开解析：
+
+<Quiz
+  question="试着答一题：Kotlin 里判断两个字符串内容是否相同，应该用哪个运算符？"
+  options={['==', '===', 'equals() 方法，Kotlin 里没有运算符能做这件事']}
+  answer={0}
+>
+
+`==` 在 Kotlin 里会被编译成 `equals()` 调用（并且自带 null 检查），
+`===` 才是 Java 里 `==` 那种引用比较。这一点和 Java 正好相反，详见
+[6.2 相等性](/docs/06-null-safety/equality)。
+
+</Quiz>
+
+填空题会按「忽略空格差异」的方式判分，并且无论对错都会给出参考答案，所以放心猜。
+
+## 建议的学习路径
+
+1. 先花 30 分钟过一遍 [Kotlin 之旅](/docs/00-start/tour)，建立整体印象。
+2. 从 [1.2 val/var、类型推断、空安全世界观](/docs/01-basics/val-var-null-safety) 正式开始——
+   这是从 Java 转过来最需要重塑思维的一课。
+3. 第 2–6 部按顺序过，遇到已经熟的可以跳。
+4. 第 7 部（集合、作用域函数）和第 8 部（协程）是 Android 日常写代码的主战场，值得慢慢啃。
+
+标了 ⭐ 的章节是重点，包括：作用域函数、sealed class、属性委托、协程基础、
+调度器、Flow、协程异常处理。

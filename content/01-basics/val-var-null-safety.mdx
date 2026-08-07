@@ -1,0 +1,301 @@
+从 Java 转 Kotlin，语法层面的东西一两天就能糊弄过去，真正需要**重塑思维**的只有三件事，
+它们全在这一课里：
+
+1. **默认不可变**——`val` 不是特例，是常态；`var` 才需要理由。
+2. **类型写在名字后面，而且大多数时候不用写**——类型推断不是弱类型。
+3. **null 从运行时问题变成编译期问题**——这是最大的一处世界观改变。
+
+<Callout type="java" title="一句话对照">
+
+Java 里 `final` 是你偶尔想起来才加的修饰符，`null` 是你上线后才发现的 NPE；
+Kotlin 把这两件事的默认值都翻转了过来。
+
+</Callout>
+
+## 1. val 与 var
+
+`val` = 只读引用（read-only），大致对应 Java 的 `final`；`var` = 可重新赋值。
+
+```kotlin
+fun main() {
+    val name = "Summer"   // 只读，类似 Java 的 final String
+    var count = 0         // 可变
+
+    count += 1
+    // name = "Xia"       // 打开这行：Val cannot be reassigned
+
+    println("$name -> $count")
+}
+```
+
+写 Kotlin 的默认姿势是**先写 `val`，发现真的需要改再退化成 `var`**。
+这跟 Java 里「先写普通变量、偶尔加 final」的习惯正好相反。
+
+<Callout type="warn" title="val 只是「引用」不可变">
+
+`val` 保证的是**这个名字不能再指向别的对象**，不保证对象内容不变。
+
+```kotlin
+fun main() {
+    val list = mutableListOf("a", "b")
+
+    list.add("c")             // ✅ 合法：改的是内容
+    // list = mutableListOf() // ❌ 非法：改的是引用
+
+    println(list)
+}
+```
+
+这和 Java 的 `final List<String> list` 完全是一回事。想要内容也不可变，
+要靠类型选择（`listOf` 返回只读的 `List`）而不是靠 `val`。
+
+</Callout>
+
+## 2. 类型推断
+
+类型写在名字后面，用冒号分隔；能推断出来的时候直接省略。
+
+```kotlin
+fun main() {
+    val a = 42        // 推断为 Int
+    val b = 42L       // Long
+    val c = 4.2       // Double
+    val d = 4.2f      // Float
+    val e: Double = 42.0   // 也可以显式写出来
+
+    // 先声明、后初始化时，类型必须写出来：
+    // 此时右边还没有表达式，编译器无从推断
+    val message: String
+    message = if (a > 10) "big" else "small"
+
+    println(listOf(a, b, c, d, e, message))
+}
+```
+
+两条实践建议：
+
+- **局部变量**尽量省略类型，让代码短。
+- **公开 API 的返回值**建议显式写类型：既是文档，也能防止改实现时悄悄改了签名。
+
+<Callout type="tip">
+
+类型推断是**编译期**完成的，`val a = 42` 之后 `a` 就是实打实的 `Int`，
+不存在任何运行时开销或动态类型。它和 Java 的 `var` 关键字是同一类东西，只是覆盖面更广。
+
+</Callout>
+
+## 3. 空安全世界观
+
+这是从 Java 转过来最需要重新建立直觉的地方。
+
+在 Kotlin 里，**类型本身就携带了「能不能为 null」的信息**：
+
+- `String` —— 永远不可能是 null，编译器保证。
+- `String?` —— 可能是 null，编译器**强制**你在用之前处理它。
+
+```kotlin
+fun main() {
+    val name: String = "Summer"
+    val nickname: String? = null
+
+    // println(nickname.length)   // ❌ 编译不过，不是运行时才炸
+
+    println(nickname?.length)                  // 安全调用 → null
+    println(nickname?.length ?: 0)             // Elvis 兜底 → 0
+    nickname?.let { println(it.uppercase()) }  // 为 null 就整段不执行
+
+    println(name.length)                       // 非空类型，随便用
+}
+```
+
+四个符号，覆盖 95% 的场景：
+
+| 写法 | 含义 | 典型用途 |
+| --- | --- | --- |
+| `?.` | 安全调用 safe call，为 null 时整个表达式取 null | 链式取值 `a?.b?.c` |
+| `?:` | Elvis 运算符，左边为 null 时取右边 | 提供默认值 |
+| `?.let { }` | 非空时才执行代码块 | 需要多行逻辑时 |
+| `!!` | 断言非空，为 null 就抛 NPE | 几乎总有更好的写法 |
+
+`?:` 右边可以是 `return` 或 `throw`，这是 Kotlin 里非常常见的提前返回写法：
+
+```kotlin
+fun greet(name: String?): String {
+    val safe = name ?: return "请先登录"
+    return "你好，$safe"
+}
+
+fun main() {
+    println(greet("Summer"))
+    println(greet(null))
+}
+```
+
+<Callout type="warn" title="!! 是在把编译期问题打回运行时">
+
+`!!` 的语义是「我以人格担保它不是 null」，赌错了就是 `KotlinNullPointerException`。
+它存在的意义主要是应付与 Java 互操作时注解缺失的场景。
+
+在 Android 上还有一类隐患：从 Java 代码（包括大量 Android SDK）返回的类型叫**平台类型
+platform type**，IDE 里显示为 `String!`。编译器对它不做空检查，等于在你的空安全防线上开了个口子。
+遇到平台类型时，**主动声明成可空类型**再处理，比顺手 `!!` 安全得多。
+
+</Callout>
+
+## 4. 智能转换 smart cast
+
+判断过类型之后，编译器在该分支内自动把变量当作那个类型用——不需要再写一次强转。
+
+```kotlin
+fun describe(obj: Any): String {
+    if (obj is String) {
+        // 这个分支里 obj 已经是 String 了
+        return "字符串，长度 ${obj.length}"
+    }
+    if (obj is Int && obj > 100) {   // && 右边也已经生效
+        return "大整数 $obj"
+    }
+    return "其他：$obj"
+}
+
+fun main() {
+    println(describe("Kotlin"))
+    println(describe(1024))
+    println(describe(3.14))
+}
+```
+
+同样的机制作用在 null 检查上：`if (x != null)` 之后，`x` 在该分支内就是非空类型了。
+所以下面这种写法是合法的，不需要 `?.`：
+
+```kotlin
+fun main() {
+    val s: String? = "Kotlin"
+
+    if (s != null && s.length > 5) {   // s 在 && 右边已经是 String
+        println(s.uppercase())         // 这里也是
+    }
+}
+```
+
+<Callout type="warn" title="smart cast 会失效">
+
+编译器只在「能证明检查之后值没被改过」时才做 smart cast。最常见的失效场景是**可变属性**：
+
+```kt
+class User {
+    var nickname: String? = null
+
+    fun show() {
+        if (nickname != null) {
+            // ❌ Smart cast to 'String' is impossible,
+            //    because 'nickname' is a mutable property that could have been changed
+            println(nickname.length)
+        }
+    }
+}
+```
+
+因为 `var` 属性随时可能被别的线程改成 null。解法是先拷进局部 `val`，或者干脆用 `?.let`：
+
+```kotlin
+class User(var nickname: String? = null) {
+    fun show() {
+        val local = nickname               // 拷到局部 val，编译器就能证明了
+        if (local != null) println(local.length)
+
+        nickname?.let { println(it.length) }   // 或者直接用 let
+    }
+}
+
+fun main() {
+    User("Summer").show()
+    User().show()
+}
+```
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      下面两行代码，哪一行会编译报错？
+      <br />
+      <code>1. val name = "Summer"</code>
+      <br />
+      <code>2. name = "Xia"</code>
+    </>
+  }
+  options={['第 1 行', '第 2 行', '两行都报错', '都不报错']}
+  answer={1}
+>
+
+第 2 行。`val` 声明的是只读引用，初始化之后不能再重新赋值，
+编译器会报 `Val cannot be reassigned`。要想改就得声明成 `var`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  type="fill"
+  question={
+    <>
+      用一行表达式：取 <code>user?.name</code>，为 null 时显示 <code>"匿名"</code>。
+    </>
+  }
+  answer={'user?.name ?: "匿名"'}
+>
+
+`?.` 负责安全取值（`user` 为 null 时整个左边取 null），`?:` 负责兜底。
+两者组合是 Kotlin 里最高频的写法之一。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  type="fill"
+  question={
+    <>
+      把这段 Java 翻成 Kotlin：
+      <br />
+      <code>if (s != null &amp;&amp; s.length() &gt; 5) System.out.println(s.toUpperCase());</code>
+    </>
+  }
+  answer={[
+    'if (s != null && s.length > 5) println(s.uppercase())',
+    's?.takeIf { it.length > 5 }?.let { println(it.uppercase()) }',
+  ]}
+>
+
+两种写法都对：
+
+- 直译版本靠 **smart cast**：`s != null` 之后，`s` 在 `&&` 右边和 `if` 体内自动变成非空的 `String`，
+  所以可以直接 `s.length`、`s.uppercase()`，不用 `?.`。
+- 更 Kotlin 味的版本用 `takeIf` + `let` 把「条件过滤」和「非空执行」串成一条链。
+
+另外注意 `length` 是属性不是方法（没有括号），`toUpperCase()` 在 Kotlin 里叫 `uppercase()`。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="判断：用 val 声明的 MutableList 不能再调用 add()。"
+  options={['正确', '错误']}
+  answer={1}
+>
+
+错误。`val` 约束的是**引用**不可重新赋值，不是内容不可变。
+`val list = mutableListOf(...)` 之后 `list.add(...)` 完全合法，
+但 `list = anotherList` 不合法。
+
+想要内容也不可变，要用只读类型（`listOf` 返回 `List` 而不是 `MutableList`）。
+
+</Quiz>
+
+## 官方参考
+
+- 官方中文：[null-safety](https://book.kotlincn.net/text/null-safety.html) ／ [basic-syntax](https://book.kotlincn.net/text/basic-syntax.html)
+- 官方英文：[null-safety](https://kotlinlang.org/docs/null-safety.html) ／ [typecasts](https://kotlinlang.org/docs/typecasts.html)

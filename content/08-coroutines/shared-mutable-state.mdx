@@ -1,0 +1,21 @@
+<Callout type="note">
+**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
+如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.9 共享状态与并发」，
+由 Claude 产出这一章的 MDX 再替换本文件。
+</Callout>
+
+## 学习提纲
+
+- 问题复现：多协程修改同一变量
+- Mutex 与 withLock
+- 限定在单线程上下文中
+- 原子类与不可变数据的取舍
+
+## 与 Java / Android 的关键差异
+
+synchronized 会阻塞线程，协程里应该用 Mutex。
+
+## 官方参考
+
+- 官方中文：[shared-mutable-state](https://book.kotlincn.net/text/shared-mutable-state.html)
+- 官方英文：[shared-mutable-state](https://kotlinlang.org/docs/shared-mutable-state.html)

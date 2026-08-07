@@ -1,0 +1,22 @@
+<Callout type="note">
+**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
+如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.12 对象表达式与对象声明（object / companion）」，
+由 Claude 产出这一章的 MDX 再替换本文件。
+</Callout>
+
+## 学习提纲
+
+- 对象表达式 = 匿名内部类
+- 对象声明 object = 线程安全单例
+- companion object 与「Kotlin 没有 static」
+- @JvmStatic / @JvmField 的互操作
+- object 单例与 Android 生命周期/内存泄漏
+
+## 与 Java / Android 的关键差异
+
+static 成员统一由 companion object 承担，必要时用 @JvmStatic 给 Java 侧用。
+
+## 官方参考
+
+- 官方中文：[object-declarations](https://book.kotlincn.net/text/object-declarations.html)
+- 官方英文：[object-declarations](https://kotlinlang.org/docs/object-declarations.html)
