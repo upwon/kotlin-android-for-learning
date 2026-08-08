@@ -1,0 +1,454 @@
+Compose 的状态管理看起来有一堆新 API（`remember`、`mutableStateOf`、
+`collectAsStateWithLifecycle`），但它们全部建立在你已经学过的东西上：
+**属性委托**、**Flow**、**结构化并发**。
+
+## 1. `by remember` 就是属性委托
+
+```kt
+@Composable
+fun Counter() {
+    var count by remember { mutableStateOf(0) }
+
+    Button(onClick = { count++ }) {
+        Text("点击了 $count 次")
+    }
+}
+```
+
+拆开看，一共三层，全是 [4.13 委托](/docs/04-classes/delegation)讲过的东西：
+
+| 写法 | 是什么 |
+| --- | --- |
+| `mutableStateOf(0)` | 创建一个 `MutableState<Int>`，读写它会触发重组 |
+| `remember { }` | 跨重组**保留**这个对象（否则每次重组都重新创建） |
+| `by` | **属性委托**——把 `count` 的 get/set 转发给 `MutableState` |
+
+`MutableState` 之所以能用 `by`，是因为标准库给它定义了委托约定：
+
+```kt
+// androidx.compose.runtime 里的定义（简化）
+operator fun <T> State<T>.getValue(thisRef: Any?, property: KProperty<*>): T = value
+
+operator fun <T> MutableState<T>.setValue(thisRef: Any?, property: KProperty<*>, value: T) {
+    this.value = value
+}
+```
+
+<Callout type="tip" title="三种等价写法">
+
+```kt
+// 1. by 委托 —— 最常用，读写像普通变量
+var count by remember { mutableStateOf(0) }
+count++
+
+// 2. 直接持有 State 对象
+val countState = remember { mutableStateOf(0) }
+countState.value++
+
+// 3. 解构 —— 拿到「值 + setter 函数」
+val (count, setCount) = remember { mutableStateOf(0) }
+setCount(count + 1)
+```
+
+第 3 种用的是 [9.3 解构](/docs/09-advanced/destructuring)的 `componentN` 约定。
+它的价值是能把 **setter 函数单独传给子组件**——状态提升时很有用。
+
+</Callout>
+
+<Callout type="warn" title="remember 的 = 和 by 别混">
+
+```kt
+var count = remember { mutableStateOf(0) }    // ❌ count 的类型是 MutableState<Int>
+count++                                        // 编译错误
+
+var count by remember { mutableStateOf(0) }   // ✅ count 的类型是 Int
+count++
+```
+
+用 `=` 时 `count` 是**容器**，用 `by` 时 `count` 是**值**。这是新手最常卡住的地方。
+
+</Callout>
+
+## 2. remember 的 key：什么时候重新计算
+
+```kt
+@Composable
+fun UserProfile(userId: String) {
+    // ❌ userId 变了，state 还是旧的
+    val state = remember { loadInitialState(userId) }
+
+    // ✅ userId 变化时重新计算
+    val state = remember(userId) { loadInitialState(userId) }
+}
+```
+
+`remember(key1, key2, ...)` 的语义：**任何一个 key 变化（用 `equals` 比较）
+就丢弃旧值重新计算**。
+
+<Callout type="warn">
+
+`equals` 这三个字很关键——它连着 [6.2 相等性](/docs/06-null-safety/equality)。
+如果 key 是一个没正确实现 `equals` 的类，`remember` 会每次都认为它变了
+（引用比较），缓存完全失效。
+
+**key 一律用 `data class` 或基本类型。**
+
+</Callout>
+
+## 3. rememberSaveable：跨进程重建
+
+```kt
+var count by rememberSaveable { mutableStateOf(0) }
+```
+
+| | 保留范围 |
+| --- | --- |
+| `remember` | 跨重组，**不跨**配置变更（旋转屏幕就丢） |
+| `rememberSaveable` | 跨配置变更、跨进程被杀重建（走 `Bundle`） |
+
+`rememberSaveable` 要求值能被存进 `Bundle`。自定义类型需要提供 `Saver`：
+
+```kt
+data class Filter(val keyword: String, val onlyActive: Boolean)
+
+val FilterSaver = listSaver<Filter, Any>(
+    save = { listOf(it.keyword, it.onlyActive) },
+    restore = { Filter(it[0] as String, it[1] as Boolean) },
+)
+
+var filter by rememberSaveable(stateSaver = ...) { mutableStateOf(Filter("", false)) }
+```
+
+<Callout type="tip">
+
+`@Parcelize` 的 data class 可以直接用（见 [4.7 数据类](/docs/04-classes/data-classes)），
+不需要写 `Saver`。
+
+</Callout>
+
+## 4. Flow → Compose 状态
+
+这是 ViewModel 和 UI 的连接点：
+
+```kt
+class MyViewModel : ViewModel() {
+    private val _state = MutableStateFlow(UiState())
+    val state: StateFlow<UiState> = _state.asStateFlow()
+}
+
+@Composable
+fun MyScreen(viewModel: MyViewModel = viewModel()) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    when {
+        state.isLoading -> LoadingIndicator()
+        state.error != null -> ErrorView(state.error)
+        else -> Content(state.items)
+    }
+}
+```
+
+<Callout type="warn" title="用 collectAsStateWithLifecycle，不要用 collectAsState">
+
+| | 行为 |
+| --- | --- |
+| `collectAsState()` | **一直收集**，页面进后台也在跑 |
+| `collectAsStateWithLifecycle()` | 生命周期低于 `STARTED` 时**停止收集**，回前台恢复 |
+
+这就是 [8.6 Flow](/docs/08-coroutines/flow)里 `repeatOnLifecycle` 的
+Compose 版本——它内部就是用 `repeatOnLifecycle` 实现的。
+
+后台页面继续收集意味着白白解析数据、消耗电量；如果上游是网络轮询还会持续发请求。
+
+需要额外依赖：
+
+```
+implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.x")
+```
+
+</Callout>
+
+## 5. 状态提升 state hoisting
+
+```kt
+// ❌ 状态藏在组件内部：无法被外部控制，也无法测试
+@Composable
+fun SearchBar() {
+    var text by remember { mutableStateOf("") }
+    TextField(value = text, onValueChange = { text = it })
+}
+
+// ✅ 状态提升：组件变成「无状态」的，值和回调都由外部提供
+@Composable
+fun SearchBar(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    TextField(value = value, onValueChange = onValueChange, modifier = modifier)
+}
+```
+
+<Callout type="success" title="这就是「单向数据流」">
+
+提升之后：
+
+- **状态向下流**（作为参数传入）
+- **事件向上流**（作为函数类型回调传出）
+
+无状态组件的好处：可复用、可预览（`@Preview`）、可测试——
+测试时直接传值和一个 lambda 就行，不需要模拟内部状态。
+
+规则：**把状态提升到「所有需要它的组件的最近公共祖先」**。
+只有当前组件自己用的 UI 状态（比如展开/折叠）才留在内部。
+
+这和 [5.2 Lambda](/docs/05-functional/lambdas)里「回调用函数类型」是同一件事。
+
+</Callout>
+
+## 6. derivedStateOf：避免不必要的重组
+
+```kt
+val listState = rememberLazyListState()
+
+// ❌ 每次滚动（firstVisibleItemIndex 每帧都在变）都触发重组
+val showButton = listState.firstVisibleItemIndex > 0
+
+// ✅ 只有布尔结果变化时才触发重组
+val showButton by remember {
+    derivedStateOf { listState.firstVisibleItemIndex > 0 }
+}
+```
+
+`derivedStateOf` 的语义：**上游频繁变化，但计算结果变化不频繁**时，
+只在结果真正变化时通知下游。
+
+<Callout type="warn">
+
+别滥用——只有在「输入变化频率 ≫ 输出变化频率」时才有收益。
+普通的 `val total = items.sumOf { it.price }` 直接写就行，
+包 `derivedStateOf` 反而多一层开销。
+
+</Callout>
+
+## 7. LaunchedEffect：在 Compose 里跑协程
+
+```kt
+@Composable
+fun MyScreen(userId: String, viewModel: MyViewModel) {
+    // key 变化时取消旧协程、启动新的；组件移除时自动取消
+    LaunchedEffect(userId) {
+        viewModel.load(userId)
+    }
+
+    // 一次性事件
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is UiEvent.ShowSnackbar -> snackbarHostState.showSnackbar(event.message)
+            }
+        }
+    }
+}
+```
+
+`LaunchedEffect` 就是 [8.2 协程基础](/docs/08-coroutines/basics)里
+「作用域绑定生命周期」的 Compose 版本：
+
+| | 作用域绑定到 |
+| --- | --- |
+| `viewModelScope` | ViewModel |
+| `lifecycleScope` | Activity/Fragment |
+| `LaunchedEffect` | **这个 Composable 在组合树中的存在期** |
+
+<Callout type="warn" title="key 用错会出大问题">
+
+```kt
+// ❌ 每次重组都重启协程（如果 items 是新对象）
+LaunchedEffect(items) { load() }
+
+// ❌ 永远只跑一次，userId 变了也不重新加载
+LaunchedEffect(Unit) { viewModel.load(userId) }
+
+// ✅ userId 变化时重新加载
+LaunchedEffect(userId) { viewModel.load(userId) }
+```
+
+key 的比较用 `equals`——和 `remember` 一样，依赖正确的 `equals` 实现。
+
+</Callout>
+
+其他 Effect 家族：
+
+| API | 用途 |
+| --- | --- |
+| `LaunchedEffect(key)` | 在组合中启动协程 |
+| `DisposableEffect(key)` | 需要**清理**的副作用（注册/注销监听器） |
+| `SideEffect` | 每次成功重组后执行（同步状态给非 Compose 代码） |
+| `rememberCoroutineScope()` | 拿一个作用域，在**回调里**启动协程 |
+
+```kt
+// 在点击回调里启动协程，用 rememberCoroutineScope 而不是 LaunchedEffect
+val scope = rememberCoroutineScope()
+Button(onClick = {
+    scope.launch { snackbarHostState.showSnackbar("已保存") }
+}) { Text("保存") }
+```
+
+## 8. 用纯 Kotlin 演示委托机制
+
+```kotlin
+import kotlin.reflect.KProperty
+
+// 模拟 MutableState
+class MutableState<T>(var value: T) {
+    private var listeners = mutableListOf<(T) -> Unit>()
+    fun onChange(l: (T) -> Unit) { listeners += l }
+
+    operator fun getValue(thisRef: Any?, property: KProperty<*>): T = value
+
+    operator fun setValue(thisRef: Any?, property: KProperty<*>, newValue: T) {
+        value = newValue
+        listeners.forEach { it(newValue) }      // 相当于触发重组
+    }
+}
+
+fun <T> mutableStateOf(initial: T) = MutableState(initial)
+
+fun main() {
+    val state = mutableStateOf(0)
+    state.onChange { println("  → 触发重组，新值 $it") }
+
+    var count by state          // 属性委托
+    println("初始 $count")
+    count++
+    count += 10
+    println("最终 $count")
+}
+```
+
+跑一下就能看到：读写 `count` 这个「普通变量」时，背后走的是委托对象的
+`getValue`/`setValue`——Compose 的状态订阅就是在 `setValue` 里挂钩的。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>var count by remember {'{'} mutableStateOf(0) {'}'}</code> 里的 <code>by</code> 是什么？
+    </>
+  }
+  options={[
+    'Compose 的新语法',
+    '属性委托：把 count 的 get/set 转发给 MutableState 的 getValue/setValue',
+    '解构声明',
+    '类型转换',
+  ]}
+  answer={1}
+>
+
+`by` 是 [4.13](/docs/04-classes/delegation) 讲的**属性委托**，不是 Compose 特有的。
+
+`MutableState` 之所以能用 `by`，是因为 Compose 给它定义了委托约定：
+
+```
+operator fun <T> State<T>.getValue(thisRef: Any?, property: KProperty<*>): T = value
+operator fun <T> MutableState<T>.setValue(...) { this.value = value }
+```
+
+三层拆开看：`mutableStateOf(0)` 创建可观察容器 → `remember { }` 跨重组保留它 →
+`by` 让你像用普通变量一样读写。
+
+对比 `=` 的写法：`val state = remember { mutableStateOf(0) }` 之后
+`state` 是**容器**，要写 `state.value++`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么应该用 <code>collectAsStateWithLifecycle()</code> 而不是 <code>collectAsState()</code>？
+    </>
+  }
+  options={[
+    '前者性能更好',
+    '前者在生命周期低于 STARTED 时停止收集，回前台恢复；后者一直收集，后台也在消耗资源',
+    '后者已废弃',
+    '两者完全一样',
+  ]}
+  answer={1}
+>
+
+`collectAsState()` **一直收集**——页面切到后台、被完全遮挡时仍在处理数据更新，
+白白解析数据、消耗电量；如果上游是网络轮询还会持续发请求。
+
+`collectAsStateWithLifecycle()` 内部用 `repeatOnLifecycle(STARTED)`
+（就是 [8.6](/docs/08-coroutines/flow) 讲的那个），页面不可见时取消收集，
+回到前台自动恢复。
+
+需要额外依赖 `androidx.lifecycle:lifecycle-runtime-compose`。
+这是 Android 官方明确推荐的做法。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>remember(userId) {'{'} ... {'}'}</code> 中 key 的比较用什么？这意味着什么？
+    </>
+  }
+  options={[
+    '引用比较（===）',
+    'equals（==）；所以 key 必须正确实现 equals，否则缓存会失效',
+    'hashCode',
+    '不比较，每次都重算',
+  ]}
+  answer={1}
+>
+
+用 `equals`。这直接连着 [6.2 相等性](/docs/06-null-safety/equality)：
+
+如果 key 是一个没重写 `equals` 的普通类，每次重组时新建的对象都「不相等」
+（退化成引用比较），`remember` 的缓存**完全失效**，每次都重新计算。
+
+规则：**key 一律用基本类型、String 或 `data class`。**
+
+同样的规则也适用于 `LaunchedEffect(key)` —— key 判定错了会导致协程被反复重启，
+表现为「网络请求发了几十次」。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="状态提升（state hoisting）带来的好处是什么？"
+  options={[
+    '性能更好',
+    '组件变成无状态的：可复用、可 @Preview、可测试；状态向下流、事件向上流',
+    '代码更短',
+    '自动处理生命周期',
+  ]}
+  answer={1}
+>
+
+把 `value` 和 `onValueChange` 提到参数里之后，组件本身不再持有状态：
+
+- **可复用**——同一个组件可以被不同的状态源驱动
+- **可预览**——`@Preview` 里直接传死值就能看效果
+- **可测试**——传一个值和一个 lambda，断言 lambda 被调用，不需要模拟内部状态
+
+这就是**单向数据流**：状态向下流（参数），事件向上流（函数类型回调）。
+本质上就是 [5.2 Lambda](/docs/05-functional/lambdas) 里「回调用函数类型」
+的应用。
+
+规则：**提升到所有需要它的组件的最近公共祖先**。纯粹自己用的 UI 状态
+（展开/折叠、滚动位置）留在内部就好。
+
+</Quiz>
+
+## 官方参考
+
+- [Compose 中的状态](https://developer.android.com/jetpack/compose/state)
+- [Compose 副作用](https://developer.android.com/jetpack/compose/side-effects)

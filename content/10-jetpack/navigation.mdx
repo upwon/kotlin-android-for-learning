@@ -1,0 +1,383 @@
+Navigation Compose 早期用**字符串路由**（`"detail/{id}"`），
+Kotlin 2.x + Navigation 2.8 之后改成了**类型安全路由**——底层是
+`kotlinx.serialization` + `sealed`。这一章讲这个演进背后的 Kotlin 机制。
+
+## 1. 字符串路由的问题
+
+```kt
+// 老写法
+NavHost(navController, startDestination = "list") {
+    composable("list") { ListScreen(onItemClick = { id ->
+        navController.navigate("detail/$id")        // ← 手工拼字符串
+    }) }
+
+    composable("detail/{id}") { backStackEntry ->
+        val id = backStackEntry.arguments?.getString("id")   // ← String?，还要自己转
+        DetailScreen(id = id!!)                              // ← 只能 !!
+    }
+}
+```
+
+三个问题，全是**类型系统缺席**导致的：
+
+- 路由字符串拼错了**编译期发现不了**
+- 参数类型全是 `String`，要手动 `toLong()`、`toBoolean()`
+- 参数可能缺失，只能 `!!` 或写一堆兜底
+
+## 2. 类型安全路由
+
+```kt
+@Serializable
+data object ListRoute
+
+@Serializable
+data class DetailRoute(val id: Long, val fromSearch: Boolean = false)
+
+NavHost(navController, startDestination = ListRoute) {
+    composable<ListRoute> {
+        ListScreen(onItemClick = { id ->
+            navController.navigate(DetailRoute(id = id))     // ← 类型安全
+        })
+    }
+
+    composable<DetailRoute> { backStackEntry ->
+        val route: DetailRoute = backStackEntry.toRoute()     // ← 直接拿到对象
+        DetailScreen(id = route.id, fromSearch = route.fromSearch)
+    }
+}
+```
+
+<Callout type="success" title="这里用到了三个 Kotlin 特性">
+
+| 特性 | 作用 |
+| --- | --- |
+| **`@Serializable` data class** | 路由参数就是一个数据类，序列化由编译期生成（见 [9.1 注解](/docs/09-advanced/annotations)） |
+| **`data object`** | 无参数的路由（见 [4.8 密封类](/docs/04-classes/sealed-classes)） |
+| **`inline` + `reified`** | `composable<DetailRoute>` 和 `toRoute<DetailRoute>()` 才能省掉 `::class`（见 [4.9 泛型](/docs/04-classes/generics)） |
+
+收益是实打实的：拼错路由**编译报错**、参数类型**由类型系统保证**、
+默认参数**正常生效**、重构改字段名 IDE 能全局跟踪。
+
+</Callout>
+
+## 3. 为什么必须 @Serializable
+
+导航参数最终要被存进 `Bundle`（进程重建时要恢复整个返回栈）。
+Navigation 用 `kotlinx.serialization` 把 data class 编码成路由字符串再解析回来。
+
+```kt
+plugins {
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.1.21"
+}
+dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.x")
+    implementation("androidx.navigation:navigation-compose:2.8.x")
+}
+```
+
+<Callout type="tip" title="为什么不用 Parcelable">
+
+`kotlinx.serialization` 在**编译期生成**序列化代码，不走反射——
+所以不需要 `@Keep`、R8 能正常裁剪、而且是跨平台的。
+
+而且它能正确处理 Kotlin 的**默认参数**和**可空性**，
+这正是 [4.7 数据类](/docs/04-classes/data-classes) 里 Gson 做不到的事。
+
+</Callout>
+
+## 4. 用 sealed 组织路由
+
+```kt
+sealed interface AppRoute {
+
+    @Serializable data object Home : AppRoute
+    @Serializable data object Search : AppRoute
+    @Serializable data class Detail(val id: Long) : AppRoute
+    @Serializable data class Profile(val userId: String) : AppRoute
+}
+
+// 集中处理导航
+fun NavController.navigateTo(route: AppRoute) = when (route) {
+    AppRoute.Home -> navigate(route) { popUpTo(AppRoute.Home) { inclusive = true } }
+    AppRoute.Search -> navigate(route)
+    is AppRoute.Detail -> navigate(route)
+    is AppRoute.Profile -> navigate(route)
+}
+```
+
+<Callout type="success">
+
+把所有路由收进一个 `sealed interface` 之后，`when` 的**穷尽性检查**开始工作：
+新增一个页面时，所有处理路由的 `when` 都会编译报错，逼你去补。
+
+这就是 [4.8 密封类](/docs/04-classes/sealed-classes) 讲的重构安全网，
+用在导航表上同样有效。
+
+</Callout>
+
+## 5. 导航事件不该由 ViewModel 直接触发
+
+```kt
+// ❌ ViewModel 持有 NavController —— 耦合、无法测试、可能泄漏
+class MyViewModel(private val navController: NavController) : ViewModel()
+
+// ✅ ViewModel 只发事件，由 UI 层决定怎么导航
+@HiltViewModel
+class MyViewModel @Inject constructor(...) : ViewModel() {
+    private val _events = MutableSharedFlow<UiEvent>()
+    val events: SharedFlow<UiEvent> = _events.asSharedFlow()
+
+    fun onItemClick(id: Long) {
+        viewModelScope.launch { _events.emit(UiEvent.NavigateToDetail(id)) }
+    }
+}
+
+sealed interface UiEvent {
+    data class NavigateToDetail(val id: Long) : UiEvent
+    data class ShowSnackbar(val message: String) : UiEvent
+}
+
+// UI 层消费
+@Composable
+fun MyScreen(viewModel: MyViewModel = hiltViewModel(), onNavigate: (AppRoute) -> Unit) {
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is UiEvent.NavigateToDetail -> onNavigate(AppRoute.Detail(event.id))
+                is UiEvent.ShowSnackbar -> snackbarHostState.showSnackbar(event.message)
+            }
+        }
+    }
+}
+```
+
+<Callout type="warn" title="为什么用 SharedFlow 而不是 StateFlow">
+
+导航是**一次性事件**——用 `StateFlow` 的话，屏幕旋转后重新收集会**再导航一次**。
+
+见 [8.6 Flow](/docs/08-coroutines/flow) 里 StateFlow vs SharedFlow 的对照：
+**「状态」可以被重复渲染，「事件」只该发生一次。**
+
+Google 目前更推荐的做法是把事件也放进 State、消费后清除——
+但导航这种场景 `SharedFlow` 仍然是常见且可接受的选择。
+
+</Callout>
+
+<Callout type="tip" title="更彻底的做法：回调向上传">
+
+```kt
+// Screen 完全不知道导航的存在，只暴露「用户点了什么」
+@Composable
+fun ListScreen(
+    onItemClick: (Long) -> Unit,
+    viewModel: ListViewModel = hiltViewModel(),
+) { ... }
+
+// 导航图里连线
+composable<ListRoute> {
+    ListScreen(onItemClick = { id -> navController.navigate(DetailRoute(id)) })
+}
+```
+
+这样 `ListScreen` 可以被 `@Preview`、可以被测试、可以被复用在不同的导航结构里——
+就是 [10.2](/docs/10-jetpack/compose-state) 状态提升的同一个思路，
+只不过提升的是**导航意图**。
+
+</Callout>
+
+## 6. 嵌套导航图与作用域
+
+```kt
+@Serializable data object OnboardingGraph
+@Serializable data object OnboardingWelcome
+@Serializable data object OnboardingPermissions
+
+NavHost(navController, startDestination = OnboardingGraph) {
+    navigation<OnboardingGraph>(startDestination = OnboardingWelcome) {
+        composable<OnboardingWelcome> { WelcomeScreen(...) }
+        composable<OnboardingPermissions> { PermissionsScreen(...) }
+    }
+}
+
+// 在子图内共享 ViewModel
+@Composable
+fun PermissionsScreen(navController: NavController) {
+    val parentEntry = remember(navController) {
+        navController.getBackStackEntry(OnboardingGraph)
+    }
+    val sharedViewModel: OnboardingViewModel = hiltViewModel(parentEntry)
+}
+```
+
+<Callout type="tip">
+
+注意 `remember(navController) { }`——这里的 key 很重要
+（见 [10.2](/docs/10-jetpack/compose-state)）：`getBackStackEntry` 不该每次重组都调，
+但 `navController` 变了必须重新取。
+
+`hiltViewModel(parentEntry)` 让整个子图共享同一个 ViewModel 实例，
+离开子图时才销毁——这是「多步表单」「引导流程」的标准做法。
+
+</Callout>
+
+## 7. 用纯 Kotlin 演示类型安全路由
+
+```kotlin
+// 用 sealed + when 模拟类型安全导航的核心收益
+sealed interface Route {
+    data object Home : Route
+    data class Detail(val id: Long, val fromSearch: Boolean = false) : Route
+    data class Profile(val userId: String) : Route
+}
+
+class Navigator {
+    private val backStack = mutableListOf<Route>(Route.Home)
+
+    fun navigate(route: Route) {
+        backStack += route
+        println("导航到 ${describe(route)}")
+    }
+
+    fun back(): Route? {
+        if (backStack.size > 1) backStack.removeLast()
+        return backStack.lastOrNull()
+    }
+
+    // 穷尽的 when：新增 Route 子类时这里会编译报错
+    private fun describe(route: Route): String = when (route) {
+        Route.Home -> "首页"
+        is Route.Detail -> "详情 id=${route.id}，来自搜索=${route.fromSearch}"
+        is Route.Profile -> "用户 ${route.userId}"
+    }
+
+    fun dump() = println("返回栈：${backStack.map { it::class.simpleName }}")
+}
+
+fun main() {
+    val nav = Navigator()
+    nav.navigate(Route.Detail(id = 42))
+    nav.navigate(Route.Detail(id = 7, fromSearch = true))
+    nav.navigate(Route.Profile("summer"))
+    nav.dump()
+
+    nav.back()
+    nav.dump()
+}
+```
+
+对比字符串路由：`Route.Detail(id = 42)` 拼错了**编译不过**，
+参数类型由编译器保证，默认参数正常生效，`when` 漏了分支也编译不过。
+
+## 练习
+
+<Quiz
+  index={1}
+  question="Navigation 的类型安全路由用到了哪个 Kotlin 库？为什么？"
+  options={[
+    'Gson，因为要序列化',
+    'kotlinx.serialization，因为路由参数要存进 Bundle 以支持进程重建，而它编译期生成代码、正确处理默认值和可空性',
+    'kotlin-reflect',
+    '不需要额外的库',
+  ]}
+  answer={1}
+>
+
+`kotlinx.serialization`。路由参数最终要编码进路由字符串 / `Bundle`——
+进程被杀后重建时，整个返回栈需要被恢复。
+
+选它而不是 Gson / Parcelable 的理由：
+
+- **编译期生成**序列化代码，不走反射 → 不需要 `@Keep`，R8 能正常裁剪
+- **正确处理 Kotlin 默认参数和可空性**——这正是
+  [4.7](/docs/04-classes/data-classes) 里 Gson 做不到的
+- 跨平台
+
+需要额外应用 `kotlin("plugin.serialization")` 插件。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么 <code>composable&lt;DetailRoute&gt; {'{'} ... {'}'}</code> 能省掉 <code>::class</code>？
+    </>
+  }
+  options={[
+    '编译器特殊处理',
+    '因为它是 inline + reified 的函数，类型参数在编译期被内联成具体类型',
+    '因为用了注解处理器',
+    '因为 DetailRoute 是 data class',
+  ]}
+  answer={1}
+>
+
+```
+inline fun <reified T : Any> NavGraphBuilder.composable(...)
+```
+
+`reified` 让函数体内能直接使用 `T` 的真实类型信息（见
+[4.9 泛型](/docs/04-classes/generics)）——原理是 `inline` 把函数体复制到调用处，
+那里 `T` 已经写死是 `DetailRoute` 了。
+
+同样的机制在 `toRoute<DetailRoute>()`、`hiltViewModel<MyViewModel>()`、
+`by viewModels()` 里都能看到。这是 Android Jetpack API 里最常见的 Kotlin 特性之一。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="ViewModel 应该持有 NavController 吗？"
+  options={[
+    '应该，这样导航最方便',
+    '不应该：会造成耦合、无法单元测试、且 NavController 关联 Activity 可能泄漏。应该让 ViewModel 发事件或由 UI 层传回调',
+    '可以，只要用 WeakReference',
+    '取决于项目规模',
+  ]}
+  answer={1}
+>
+
+三个问题：
+
+- **耦合**：ViewModel 属于表现层逻辑，不该知道导航图的结构
+- **不可测试**：单元测试里没法构造一个真的 `NavController`
+- **可能泄漏**：`NavController` 关联着 Activity/Fragment，
+  而 ViewModel 的生命周期更长
+
+两种正确做法：
+
+1. **ViewModel 发事件**（`SharedFlow<UiEvent>`），UI 层收集并决定怎么导航
+2. **UI 层传回调**（`onItemClick: (Long) -> Unit`），Screen 完全不知道导航存在——
+   这样还能 `@Preview` 和复用
+
+第 2 种更彻底，本质上是[状态提升](/docs/10-jetpack/compose-state)的同一个思路。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="把所有路由收进一个 sealed interface 有什么额外好处？"
+  options={[
+    '性能更好',
+    'when 的穷尽性检查开始生效：新增页面时所有处理路由的 when 会编译报错，逼你补全',
+    '路由字符串更短',
+    '可以自动生成导航图',
+  ]}
+  answer={1}
+>
+
+`sealed` 的核心价值就是**穷尽性检查**（见
+[4.8 密封类](/docs/04-classes/sealed-classes)）。
+
+导航表是典型的「会持续增长」的结构——新加一个页面时，
+可能有好几处需要更新：导航分发、深链解析、埋点映射、底部栏高亮判断。
+
+用 `sealed` 组织之后，这些地方的 `when` 全部编译报错，
+编译器给你一份精确的 TODO 清单。用字符串常量的话，只能靠人肉搜索。
+
+</Quiz>
+
+## 官方参考
+
+- [Navigation Compose](https://developer.android.com/guide/navigation)
+- [类型安全导航](https://developer.android.com/guide/navigation/design/type-safety)

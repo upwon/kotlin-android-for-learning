@@ -1,0 +1,513 @@
+协程和 Flow 让业务逻辑变得好写，但也带来一个新问题：**怎么测试异步代码？**
+这一章讲协程测试库的核心机制，以及为什么前面反复强调的「注入 Dispatcher」在这里兑现。
+
+## 1. runTest：虚拟时间
+
+```kt
+@Test
+fun `延迟 5 秒的逻辑应该立刻测完`() = runTest {
+    val start = currentTime
+
+    delay(5_000)                    // 不会真的等 5 秒
+
+    assertEquals(5_000, currentTime - start)
+}
+```
+
+<Callout type="success" title="虚拟时钟是核心机制">
+
+`runTest` 使用 `TestCoroutineScheduler`——`delay()` **不真的等待**，
+而是把虚拟时钟往前拨。
+
+所以一个「轮询 30 秒」「重试 3 次每次退避 2 秒」的逻辑，
+测试跑完只需要几毫秒。
+
+对比 `runBlocking`：那是真的阻塞真的等，测试套件会慢到没人愿意跑。
+
+</Callout>
+
+```kt
+dependencies {
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.x")
+}
+```
+
+## 2. 注入 Dispatcher 的回报
+
+这就是 [8.5](/docs/08-coroutines/context-and-dispatchers) 和
+[10.5](/docs/10-jetpack/viewmodel-and-di) 反复强调的那件事：
+
+```kt
+// ❌ 硬编码：测试无法控制执行时机
+class UserRepository(private val api: ApiService) {
+    suspend fun getUser(id: String) = withContext(Dispatchers.IO) { api.fetch(id) }
+}
+
+// ✅ 注入
+class UserRepository(
+    private val api: ApiService,
+    private val io: CoroutineDispatcher = Dispatchers.IO,
+) {
+    suspend fun getUser(id: String) = withContext(io) { api.fetch(id) }
+}
+```
+
+```kt
+@Test
+fun `getUser 应返回映射后的领域模型`() = runTest {
+    val repo = UserRepository(FakeApi(), StandardTestDispatcher(testScheduler))
+
+    val user = repo.getUser("1")
+
+    assertEquals("Summer", user.name)
+}
+```
+
+<Callout type="warn" title="不注入的后果">
+
+`withContext(Dispatchers.IO)` 会把代码派发到**真实的后台线程池**——
+它不受 `runTest` 的虚拟时钟控制，测试要么随机失败，要么得靠 `Thread.sleep` 硬等。
+
+把 `testScheduler` 传进去之后，所有协程都在同一个虚拟时钟下调度，
+执行顺序完全确定。
+
+</Callout>
+
+## 3. 两种 TestDispatcher
+
+```kt
+@Test
+fun standardDispatcher() = runTest {
+    val results = mutableListOf<String>()
+
+    launch(StandardTestDispatcher(testScheduler)) {
+        results += "协程"
+    }
+    results += "主体"
+
+    // 此时 results 只有 "主体" —— 协程还没开始
+    runCurrent()                    // 手动推进调度器
+    // 现在 results 是 ["主体", "协程"]
+}
+
+@Test
+fun unconfinedDispatcher() = runTest {
+    val results = mutableListOf<String>()
+
+    launch(UnconfinedTestDispatcher(testScheduler)) {
+        results += "协程"           // 立刻执行，直到第一个挂起点
+    }
+    results += "主体"
+
+    // results 是 ["协程", "主体"]
+}
+```
+
+| | `StandardTestDispatcher` | `UnconfinedTestDispatcher` |
+| --- | --- | --- |
+| 启动时机 | 排队，需要推进调度器 | **立刻执行**到第一个挂起点 |
+| 适合 | 需要精确控制执行顺序 | 只想让协程「赶紧跑完」 |
+| 推荐度 | 默认选它 | 简单场景更省事 |
+
+推进虚拟时间的工具：
+
+| 方法 | 作用 |
+| --- | --- |
+| `runCurrent()` | 执行当前已排队的任务 |
+| `advanceTimeBy(ms)` | 虚拟时间前进指定毫秒 |
+| `advanceUntilIdle()` | 一直推进直到没有待执行任务 |
+
+## 4. 测试 ViewModel
+
+ViewModel 内部用的是 `viewModelScope`（写死了 `Dispatchers.Main`），
+所以需要替换主调度器：
+
+```kt
+class MainDispatcherRule(
+    private val dispatcher: TestDispatcher = UnconfinedTestDispatcher(),
+) : TestWatcher() {
+    override fun starting(description: Description) = Dispatchers.setMain(dispatcher)
+    override fun finished(description: Description) = Dispatchers.resetMain()
+}
+
+class UserViewModelTest {
+    @get:Rule val mainDispatcherRule = MainDispatcherRule()
+
+    @Test
+    fun `加载成功时应发出 Success 状态`() = runTest {
+        val viewModel = UserViewModel(FakeRepository())
+
+        viewModel.load("1")
+        advanceUntilIdle()
+
+        assertTrue(viewModel.state.value is UiState.Success)
+    }
+}
+```
+
+<Callout type="warn" title="Dispatchers.setMain 不是可选的">
+
+不调用它，`viewModelScope.launch { }` 会尝试用真实的
+`Dispatchers.Main`（Android 主线程 Looper）——而 JVM 单元测试里根本没有 Looper，
+直接抛 `IllegalStateException: Module with the Main dispatcher had failed to initialize`。
+
+用 `TestWatcher` 规则封装是标准做法，每个 ViewModel 测试类加一行 `@get:Rule` 就行。
+
+</Callout>
+
+## 5. 测试 Flow
+
+直接 `collect` 一个不会结束的 Flow（比如 `StateFlow`）会让测试挂住。
+两种解法：
+
+**方式一：Turbine（推荐）**
+
+```kt
+testImplementation("app.cash.turbine:turbine:1.x")
+```
+
+```kt
+@Test
+fun `搜索应先发 Loading 再发 Success`() = runTest {
+    val viewModel = SearchViewModel(FakeRepository())
+
+    viewModel.state.test {                       // Turbine
+        assertEquals(UiState.Idle, awaitItem())
+
+        viewModel.search("kotlin")
+
+        assertEquals(UiState.Loading, awaitItem())
+        val success = awaitItem() as UiState.Success
+        assertEquals(3, success.items.size)
+
+        cancelAndIgnoreRemainingEvents()
+    }
+}
+```
+
+**方式二：手动收集到 list**
+
+```kt
+@Test
+fun `状态序列应正确`() = runTest {
+    val viewModel = SearchViewModel(FakeRepository())
+    val emissions = mutableListOf<UiState>()
+
+    val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+        viewModel.state.toList(emissions)
+    }
+
+    viewModel.search("kotlin")
+    advanceUntilIdle()
+
+    assertEquals(3, emissions.size)
+    job.cancel()
+}
+```
+
+<Callout type="tip" title="Turbine 好在哪">
+
+- `awaitItem()` 会**挂起等待**下一个值，写起来就像同步代码
+- 测试结束时如果还有未消费的事件会**报错**——能发现「多发了一次」这类 bug
+- `awaitError()`、`awaitComplete()` 让异常和完成也能被断言
+
+手动收集的方式需要自己管理 job、自己处理时序，容易写出偶发失败的测试。
+
+</Callout>
+
+<Callout type="warn" title="StateFlow 会跳过中间值">
+
+```kt
+_state.value = Loading
+_state.value = Success(data)     // 如果收集者还没来得及处理 Loading
+```
+
+`StateFlow` 是**conflated** 的——收集慢时中间值会被跳过。所以
+「断言一定收到了 Loading」这种测试是**脆弱**的。
+
+要么用 `UnconfinedTestDispatcher` 保证收集者能立刻处理每个值，
+要么改成断言**最终状态**，要么把需要保证不丢的东西改用 `SharedFlow`。
+
+</Callout>
+
+## 6. Fake 优于 Mock
+
+```kt
+// ✅ Fake：一个真实的、简化的实现
+class FakeUserRepository : UserRepository {
+    private val users = MutableStateFlow<List<User>>(emptyList())
+    var shouldFail = false
+
+    override fun observeUsers(): Flow<List<User>> = users
+
+    override suspend fun refresh() {
+        if (shouldFail) throw IOException("模拟网络错误")
+        users.value = listOf(User("1", "Summer"), User("2", "Xia"))
+    }
+}
+```
+
+<Callout type="success" title="为什么 Fake 比 Mock 好">
+
+- **不受 final 影响**——Kotlin 类默认 final（见
+  [4.1 类](/docs/04-classes/classes)），Mockito 需要额外配置，Fake 没这个问题
+- **可复用**——一个 Fake 能服务几十个测试用例
+- **不会过时**——接口变了 Fake 编译报错，而 mock 的 stub 可能静默失效
+- **能表达状态**——上面的 Fake 有真实的 `StateFlow`，
+  能测试「刷新后 UI 收到新数据」这类时序行为
+
+前提是**面向接口编程**——这也是为什么 Repository 应该有接口。
+需要 mock 具体类时用 **mockk**（原生支持 final）。
+
+</Callout>
+
+## 7. 测试 Compose
+
+```kt
+@get:Rule val composeRule = createComposeRule()
+
+@Test
+fun `点击按钮应触发回调`() {
+    var clicked = false
+
+    composeRule.setContent {
+        MyButton(text = "确定", onClick = { clicked = true })
+    }
+
+    composeRule.onNodeWithText("确定").performClick()
+
+    assertTrue(clicked)
+}
+```
+
+<Callout type="tip" title="状态提升让 Compose 测试变简单">
+
+因为 `MyButton` 是**无状态**的（见 [10.2](/docs/10-jetpack/compose-state)），
+测试只需要传一个值和一个 lambda——不需要构造 ViewModel、不需要 mock Repository。
+
+如果组件内部藏了 `remember { mutableStateOf() }` 和 ViewModel，
+这个测试就得启动半个应用。
+
+**可测试性是状态提升最直接的回报之一。**
+
+</Callout>
+
+## 8. 一个完整的测试
+
+```kt
+class SearchViewModelTest {
+
+    @get:Rule val mainDispatcherRule = MainDispatcherRule()
+
+    private lateinit var repository: FakeSearchRepository
+    private lateinit var viewModel: SearchViewModel
+
+    @Before
+    fun setup() {
+        repository = FakeSearchRepository()
+        viewModel = SearchViewModel(repository)
+    }
+
+    @Test
+    fun `输入后应防抖 300ms 再发起搜索`() = runTest {
+        viewModel.results.test {
+            assertEquals(emptyList<Item>(), awaitItem())
+
+            viewModel.onQueryChange("ko")
+            advanceTimeBy(299)
+            assertEquals(0, repository.searchCallCount)     // 还没发起
+
+            advanceTimeBy(2)
+            assertEquals(1, repository.searchCallCount)     // 防抖生效
+
+            assertEquals(3, awaitItem().size)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `连续输入应只发起最后一次搜索`() = runTest {
+        viewModel.onQueryChange("k")
+        advanceTimeBy(100)
+        viewModel.onQueryChange("ko")
+        advanceTimeBy(100)
+        viewModel.onQueryChange("kot")
+        advanceUntilIdle()
+
+        assertEquals(1, repository.searchCallCount)         // flatMapLatest 生效
+        assertEquals("kot", repository.lastQuery)
+    }
+
+    @Test
+    fun `网络失败应发出错误状态`() = runTest {
+        repository.shouldFail = true
+
+        viewModel.onQueryChange("kotlin")
+        advanceUntilIdle()
+
+        assertTrue(viewModel.error.value != null)
+    }
+}
+```
+
+<Callout type="success">
+
+注意第一个测试：**用虚拟时间精确断言防抖的时间边界**——
+`advanceTimeBy(299)` 时还没发请求，再推进 2ms 就发了。
+
+这种测试用真实时间根本没法可靠地写（要 `Thread.sleep(300)`，
+还会因为机器负载而偶发失败）。虚拟时钟让时序逻辑变成了可以精确断言的东西。
+
+</Callout>
+
+## 9. 用纯 Kotlin 演示虚拟时间
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.test.*
+
+fun main() = runTest {
+    val log = mutableListOf<String>()
+
+    val job = launch {
+        repeat(3) { i ->
+            delay(1_000)                  // 每次「等」1 秒
+            log += "第 ${i + 1} 次，虚拟时间 ${currentTime}ms"
+        }
+    }
+
+    val realStart = System.currentTimeMillis()
+    job.join()
+    val realElapsed = System.currentTimeMillis() - realStart
+
+    log.forEach(::println)
+    println("虚拟时间共 ${currentTime}ms")
+    println("真实耗时 ${realElapsed}ms —— 几乎没等")
+}
+```
+
+跑一下能看到：虚拟时间走了 3000ms，真实耗时只有几毫秒。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>runTest</code> 里的 <code>delay(5000)</code> 会真的等 5 秒吗？
+    </>
+  }
+  options={[
+    '会',
+    '不会，runTest 使用虚拟时钟，delay 只是把虚拟时间往前拨，测试瞬间完成',
+    '会等，但可以配置',
+    'delay 在测试里会抛异常',
+  ]}
+  answer={1}
+>
+
+`runTest` 使用 `TestCoroutineScheduler`——一个**虚拟时钟**。
+`delay()` 不真的挂起等待，只是推进虚拟时间。
+
+所以「轮询 30 秒」「重试 3 次每次退避 2 秒」这类逻辑，测试跑完只要几毫秒。
+
+更重要的是它让**时序本身可以被精确断言**：
+
+```
+advanceTimeBy(299)
+assertEquals(0, repository.callCount)    // 防抖还没触发
+advanceTimeBy(2)
+assertEquals(1, repository.callCount)    // 触发了
+```
+
+用真实时间的话，这种测试要 `Thread.sleep`，而且会因机器负载偶发失败。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="测试 ViewModel 时为什么必须调用 Dispatchers.setMain？"
+  options={[
+    '为了性能',
+    'viewModelScope 用的是 Dispatchers.Main，而 JVM 单元测试里没有 Android 主线程 Looper，会直接抛异常',
+    '为了支持多线程',
+    '不是必须的',
+  ]}
+  answer={1}
+>
+
+`viewModelScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)`——
+硬编码了主调度器。
+
+JVM 单元测试里没有 Android 的 Looper，`Dispatchers.Main` 初始化失败，
+抛 `IllegalStateException: Module with the Main dispatcher had failed to initialize`。
+
+`Dispatchers.setMain(testDispatcher)` 把它替换成受虚拟时钟控制的测试调度器，
+测完 `Dispatchers.resetMain()` 还原。
+
+标准做法是封装成 JUnit `TestWatcher` 规则，每个测试类加一行 `@get:Rule`。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="为什么推荐用 Fake 而不是 Mock 来测试 Repository？"
+  options={[
+    'Mock 不能用于 Kotlin',
+    'Kotlin 类默认 final（Mockito 需额外配置）；Fake 可复用、接口变了会编译报错、还能表达真实的状态与时序',
+    'Fake 运行更快',
+    '没有区别',
+  ]}
+  answer={1}
+>
+
+四条理由：
+
+- **默认 final**：Kotlin 类不 `open` 就不能被 Mockito 代理（见
+  [4.1 类](/docs/04-classes/classes)）。Fake 是真实实现，没这个问题。
+- **可复用**：一个 Fake 服务几十个用例，不用每个测试都写一遍 stub。
+- **不会静默过时**：接口改了 Fake **编译报错**；而 mock 的 stub 可能悄悄失效
+  （比如方法改名后 `when(mock.oldMethod())` 再也没被调用，测试却还是绿的）。
+- **能表达状态**：Fake 里放一个真的 `StateFlow`，就能测「刷新后 UI 收到新数据」
+  这类时序行为，mock 很难模拟。
+
+前提是**面向接口编程**。需要 mock 具体类时用 **mockk**（原生支持 final）。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      为什么断言「一定收到了 Loading 状态」的 StateFlow 测试是脆弱的？
+    </>
+  }
+  options={[
+    'StateFlow 不能被测试',
+    'StateFlow 是 conflated 的，收集者处理慢时中间值会被跳过',
+    'Loading 状态不会被发射',
+    'runTest 不支持 StateFlow',
+  ]}
+  answer={1}
+>
+
+`StateFlow` 会做**去重与合并**（conflation）：如果收集者还没处理完
+`Loading`，`Success` 就来了，`Loading` 会被直接跳过——这是设计如此，
+因为 UI 只关心最新状态。
+
+所以这类断言可能在本机通过、在 CI 上失败。
+
+三种更稳的写法：
+
+1. 用 `UnconfinedTestDispatcher` 保证收集者能立刻处理每个值
+2. 只断言**最终状态**（`viewModel.state.value`）
+3. 确实需要保证每个中间态都不丢时，改用 `SharedFlow`
+   （见 [8.6 Flow](/docs/08-coroutines/flow)）
+
+</Quiz>
+
+## 官方参考
+
+- [协程测试](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/)
+- [Android 上测试协程](https://developer.android.com/kotlin/coroutines/test)
+- [Turbine](https://github.com/cashapp/turbine)

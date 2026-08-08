@@ -3,17 +3,18 @@
 一条为 **Android 原生开发**裁剪的 Kotlin 学习路线。内容基于 Kotlin 官方文档重组，
 砍掉 Native / JS / Wasm / Spring / 数据分析等与目标无关的部分，全程拿 Java 与 Android 做对照。
 
-- 全站 **56 章**，内容全部写完
-- **302 段可运行代码**——由 [Kotlin Playground](https://github.com/JetBrains/kotlin-playground) 驱动，可以直接改了再跑
-- **216 道交互练习题**（单选 / 多选 / 填空 + 详细解析）
+- 全站 **66 章**，内容全部写完
+- **312 段可运行代码**——由 [Kotlin Playground](https://github.com/JetBrains/kotlin-playground) 驱动，可以直接改了再跑
+- **255 道交互练习题**（单选 / 多选 / 填空 + 详细解析）
 - 全程拿 Java / Android 做对照，只讲差异
+- 第 10 部从 Kotlin 语言视角解释 Jetpack 与 Compose 的设计（不是 API 教程）
 
 ## 本地开发
 
 ```bash
 npm install
 npm run dev      # http://localhost:3000
-npm run build    # 生产构建（56 章全部静态预渲染）
+npm run build    # 生产构建（66 章全部静态预渲染）
 ```
 
 ## 目录结构

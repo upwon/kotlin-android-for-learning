@@ -1,0 +1,369 @@
+「为什么我的 Compose 卡顿 / 明明数据没变却一直重组」——绝大多数答案在这一章。
+而它的根子全在 Kotlin 侧：**不可变性**、**`equals`**、**lambda 捕获**。
+
+## 1. 重组跳过的前提：参数「稳定」
+
+Compose 在重组时会检查：**这个 Composable 的参数变了吗？没变就跳过。**
+
+但它只对**稳定** stable 的类型做这个判断。类型不稳定 = 每次都重组。
+
+<Callout type="success" title="什么类型是稳定的">
+
+编译器认为一个类型稳定，需要满足：
+
+1. `equals` 的结果对同一对实例**始终一致**
+2. 公开属性变化时**会通知** Compose（即是 `State` 支持的）
+3. **所有公开属性也是稳定的**
+
+自动判定为稳定的：
+
+- 所有基本类型、`String`
+- 函数类型（lambda）
+- **所有属性都是 `val` 且类型稳定的 `data class`**
+- `State<T>`、`ImmutableList` 等标注了 `@Stable`/`@Immutable` 的类型
+
+</Callout>
+
+## 2. 三个最常见的「不稳定」来源
+
+### ① `var` 属性
+
+```kt
+// ❌ 不稳定：someName 可以被改，但改了 Compose 不知道
+data class User(var name: String, var age: Int)
+
+// ✅ 稳定
+data class User(val name: String, val age: Int)
+```
+
+这直接对应 [1.2](/docs/01-basics/val-var-null-safety) 的第一课：
+**能用 `val` 就别用 `var`**。在 Compose 里这条不只是风格问题，是性能问题。
+
+### ② `List` 接口
+
+```kt
+// ❌ 不稳定！
+data class UiState(val items: List<Item>)
+```
+
+<Callout type="warn" title="这是最反直觉的一条">
+
+`List` 是**只读接口**，不是不可变类型——回顾
+[7.1 集合概述](/docs/07-collections/overview)：
+
+```kt
+val mutable = mutableListOf("a")
+val readOnly: List<String> = mutable    // 同一个对象
+mutable.add("b")                         // readOnly 跟着变了
+```
+
+编译器无法证明运行时传进来的不是一个 `MutableList`，
+所以**保守地把所有 `List`/`Set`/`Map` 判为不稳定**。
+
+后果：任何持有 `List` 的 UI State，每次重组都无法跳过。
+
+**三种解法：**
+
+```kt
+// 1. kotlinx.collections.immutable（官方推荐）
+implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable:0.3.x")
+
+data class UiState(val items: ImmutableList<Item>)
+// 构造：persistentListOf(...) 或 list.toImmutableList()
+
+// 2. @Immutable 注解 —— 你向编译器保证它不会变
+@Immutable
+data class UiState(val items: List<Item>)
+
+// 3. 开启强跳过模式（Kotlin 2.0+ 的 Compose 编译器）
+// build.gradle.kts
+composeCompiler {
+    // 默认已启用，会用引用相等来跳过不稳定类型
+}
+```
+
+**方式 2 是一个承诺，不是检查**——如果你标了 `@Immutable` 却真的传了可变 list
+并原地修改，UI 不会更新，而且没有任何报错。用它就要真的守约。
+
+</Callout>
+
+### ③ 来自其他模块的类
+
+```kt
+// 另一个 Gradle module 里的类，Compose 编译器看不到它的实现
+data class ExternalModel(val id: String)
+```
+
+Compose 编译器只能推断**当前编译单元**内的类。跨模块的类默认不稳定，
+除非那个模块也应用了 Compose 编译器插件，或者显式标注了 `@Stable`。
+
+多 module 项目里这是个隐形的性能坑。
+
+## 3. lambda 捕获导致的重组
+
+```kt
+// ❌ 每次重组都创建新 lambda，UserCard 的参数「变了」
+@Composable
+fun UserList(users: List<User>, viewModel: MyViewModel) {
+    LazyColumn {
+        items(users) { user ->
+            UserCard(
+                user = user,
+                onClick = { viewModel.select(user.id) },   // 捕获了 user
+            )
+        }
+    }
+}
+```
+
+<Callout type="tip" title="Compose 编译器会自动 remember 一部分 lambda">
+
+对于**不捕获任何变量**或只捕获稳定值的 lambda，Compose 编译器会自动
+`remember` 它们（这叫 lambda memoization），所以不用手动优化每一个回调。
+
+真正需要注意的是**捕获了不稳定对象**的 lambda。缓解办法：
+
+```kt
+// ✅ 把回调参数化，让 lambda 不捕获循环变量
+UserCard(
+    user = user,
+    onClick = viewModel::select,       // 方法引用，稳定
+)
+
+// 或者把 id 作为参数传出来
+@Composable
+fun UserCard(user: User, onClick: (String) -> Unit) {
+    Card(onClick = { onClick(user.id) }) { /* ... */ }
+}
+```
+
+方法引用（[5.1 函数进阶](/docs/05-functional/functions-advanced)）在这里
+比 lambda 更稳定，因为它不捕获任何东西。
+
+</Callout>
+
+## 4. LazyColumn 的 key
+
+```kt
+// ❌ 没有 key：插入/删除时所有项的状态错位
+LazyColumn {
+    items(users) { user -> UserCard(user) }
+}
+
+// ✅ 提供稳定的 key
+LazyColumn {
+    items(users, key = { it.id }) { user -> UserCard(user) }
+}
+```
+
+这和 [6.2 相等性](/docs/06-null-safety/equality)里 `DiffUtil` 的
+`areItemsTheSame` 是同一件事：**Compose 需要知道「哪一项是哪一项」**，
+才能在列表变化时正确复用状态、播放动画。
+
+<Callout type="warn">
+
+key 必须**唯一且稳定**。用 `index` 做 key 等于没有 key——
+插入一项之后所有 index 都变了。
+
+</Callout>
+
+## 5. 怎么诊断
+
+<Callout type="success" title="开启编译器报告">
+
+```kt
+// build.gradle.kts
+composeCompiler {
+    reportsDestination = layout.buildDirectory.dir("compose_compiler")
+    metricsDestination = layout.buildDirectory.dir("compose_compiler")
+}
+```
+
+构建后在 `build/compose_compiler/` 下会生成报告，标出每个 Composable
+是 `restartable`、`skippable` 还是不可跳过，以及每个类是 `stable` 还是 `unstable`。
+
+这比盯着代码猜有效得多——**先看报告，再优化**。
+
+另外 Android Studio 的 **Layout Inspector** 能显示重组次数，
+直接看到哪个组件重组得最多。
+
+</Callout>
+
+## 6. 强跳过模式（Kotlin 2.0+）
+
+Compose 编译器 1.5.4+ 引入了**强跳过模式** strong skipping，
+在 Kotlin 2.0 的 Compose 编译器里**默认开启**：
+
+| | 默认模式 | 强跳过模式 |
+| --- | --- | --- |
+| 稳定参数 | 用 `equals` 比较 | 用 `equals` 比较 |
+| **不稳定参数** | **无法跳过** | **用引用相等比较**，相同就跳过 |
+| lambda | 部分自动 remember | **全部**自动 remember |
+
+<Callout type="tip">
+
+强跳过模式大幅降低了「不稳定类型」的伤害——传同一个 `List` 实例进去，
+现在也能跳过重组了。
+
+但它**不能替代**正确的建模：
+
+- 如果你每次都用 `list.map { }` 生成新 list，引用还是不同的，照样重组
+- 不可变数据 + `data class` 仍然是更可靠的做法
+
+**把强跳过当兜底，不当解法。**
+
+</Callout>
+
+## 7. 用纯 Kotlin 演示「为什么 List 不可信」
+
+```kotlin
+fun main() {
+    val mutable = mutableListOf("a", "b")
+    val readOnly: List<String> = mutable      // 只是换了个类型看它
+
+    println("readOnly = $readOnly")
+    mutable.add("c")
+    println("mutable.add 之后 readOnly = $readOnly")   // 跟着变了！
+
+    // 引用完全相同
+    println("是同一个对象吗：${readOnly === mutable}")
+
+    // 所以 equals 无法反映「内容有没有被改过」
+    val snapshot = readOnly
+    mutable.add("d")
+    println("snapshot == readOnly ? ${snapshot == readOnly}")   // true，但内容确实变了
+}
+```
+
+<Callout type="warn">
+
+最后一行是关键：`snapshot` 和 `readOnly` 指向同一对象，
+`equals` 永远返回 `true`——**基于 `equals` 的变化检测在可变集合上完全失效**。
+
+这就是 Compose 把 `List` 判为不稳定的原因，也是
+[7.1](/docs/07-collections/overview) 里「StateFlow 不刷新」问题的同一个根源。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      为什么 <code>data class UiState(val items: List&lt;Item&gt;)</code> 被 Compose 判为不稳定？
+    </>
+  }
+  options={[
+    '因为 List 太大',
+    '因为 List 是只读接口不是不可变类型，运行时可能是 MutableList，编译器无法保证内容不变',
+    '因为 List 没有实现 equals',
+    '这个判断是错的',
+  ]}
+  answer={1}
+>
+
+`List` 只保证「**通过这个引用**你改不了」，不保证「没有别人能改」——
+运行时传进来的完全可能是一个 `MutableList`，被别处原地修改。
+
+而稳定性的定义要求「`equals` 结果始终一致」和「内容变化会通知 Compose」，
+可变集合两条都做不到。所以编译器保守地把所有 `List`/`Set`/`Map` 判为不稳定。
+
+三种解法：用 `kotlinx.collections.immutable` 的 `ImmutableList`（推荐）、
+标 `@Immutable`（一个承诺，你要真的守约）、或依赖强跳过模式兜底。
+
+这和 [7.1](/docs/07-collections/overview) 里「StateFlow 不刷新」是同一个根源。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>data class User(var name: String)</code> 和 <code>data class User(val name: String)</code>
+      在 Compose 里有什么区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    'var 版本不稳定（值可变但变了 Compose 不知道），导致持有它的 Composable 无法跳过重组',
+    'var 版本性能更好',
+    'val 版本不能修改数据',
+  ]}
+  answer={1}
+>
+
+稳定性要求「公开属性变化时会通知 Compose」。`var` 属性可以被任意代码改写，
+改了之后 Compose 完全不知道，所以整个类被判为不稳定。
+
+后果是持有它的 Composable **每次都要重组**，无法跳过。
+
+这让 [1.2](/docs/01-basics/val-var-null-safety) 的「默认用 `val`」
+从风格建议升级成了性能要求。
+
+需要「修改」时用 `copy()` 生成新实例——这正是 `data class` 的设计意图。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>LazyColumn</code> 的 <code>items(list, key = {'{'} it.id {'}'})</code> 中 key 的作用是什么？
+    </>
+  }
+  options={[
+    '提升渲染速度',
+    '让 Compose 知道「哪一项是哪一项」，列表增删时才能正确复用状态和播放动画',
+    '用于排序',
+    '可选的，不影响功能',
+  ]}
+  answer={1}
+>
+
+和 `RecyclerView` 的 `DiffUtil.areItemsTheSame` 是同一件事：
+**标识身份**，而不是标识内容。
+
+没有 key 时 Compose 按**位置**匹配——在列表头部插入一项，
+所有项的位置都变了，于是每一项的内部状态（展开/折叠、输入框内容、动画进度）
+全部错位。
+
+key 必须**唯一且稳定**：用业务 ID，不要用 `index`（插入一项后所有 index 都变）。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="Kotlin 2.0 默认开启的「强跳过模式」是否意味着不用再关心稳定性了？"
+  options={[
+    '是，可以完全不管了',
+    '不是。它用引用相等给不稳定参数兜底，但如果每次都生成新实例（如 list.map{}），照样重组',
+    '强跳过模式会降低性能',
+    '强跳过模式需要手动开启',
+  ]}
+  answer={1}
+>
+
+强跳过模式的作用是：对**不稳定**参数改用**引用相等**判断——
+传同一个 `List` 实例进去也能跳过重组了。它确实大幅降低了稳定性问题的伤害。
+
+但它**不能替代正确建模**：
+
+```
+// 每次重组都生成新 list，引用不同，强跳过也救不了
+val visible = allItems.filter { it.isVisible }
+MyList(items = visible)
+```
+
+正确做法是把这类派生计算放进 ViewModel 或用 `remember(allItems) { }` 缓存。
+
+结论：**把强跳过当兜底，不当解法。** 不可变数据 + `data class` +
+`ImmutableList` 仍然是更可靠的路径。
+
+</Quiz>
+
+## 官方参考
+
+- [Compose 性能](https://developer.android.com/jetpack/compose/performance)
+- [稳定性](https://developer.android.com/jetpack/compose/performance/stability)
+- [强跳过模式](https://developer.android.com/jetpack/compose/performance/stability/strongskipping)

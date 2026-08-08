@@ -1,0 +1,492 @@
+Room、DataStore、Paging 3、Retrofit——Jetpack 数据层的现代 API **全部以 `Flow` 为核心**。
+这一章讲它们怎么串成一条链，以及 Kotlin 特性在其中的位置。
+
+## 1. 单一数据源
+
+```kt
+class UserRepository @Inject constructor(
+    private val dao: UserDao,
+    private val api: ApiService,
+    @IoDispatcher private val io: CoroutineDispatcher,
+) {
+    // UI 只观察数据库
+    val users: Flow<List<User>> = dao.observeAll()
+        .map { entities -> entities.map { it.toDomain() } }
+        .flowOn(io)
+
+    // 网络只负责更新数据库
+    suspend fun refresh() = withContext(io) {
+        val fresh = api.getUsers()
+        dao.replaceAll(fresh.map { it.toEntity() })
+        // 插入后 observeAll() 自动发射新值，UI 自动更新
+    }
+}
+```
+
+<Callout type="success" title="这个模式的价值">
+
+**UI 不需要知道数据是从网络还是缓存来的**——它只观察一个 Flow。
+
+- 离线可用：网络失败时数据库里的旧数据还在
+- 无需手动通知：Room 的 `Flow` 在表变化时自动重新查询
+- 单一真相：不会出现「列表页和详情页数据不一致」
+
+这就是官方架构指南里的 **single source of truth**。
+
+</Callout>
+
+## 2. Room 的三种返回类型
+
+```kt
+@Dao
+interface UserDao {
+    // ① suspend：一次性查询，主线程安全
+    @Query("SELECT * FROM users WHERE id = :id")
+    suspend fun getById(id: String): UserEntity?
+
+    // ② Flow：可观察查询，表变化时自动重新发射
+    @Query("SELECT * FROM users ORDER BY name")
+    fun observeAll(): Flow<List<UserEntity>>
+
+    // ③ PagingSource：分页
+    @Query("SELECT * FROM users ORDER BY name")
+    fun pagingSource(): PagingSource<Int, UserEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(users: List<UserEntity>)
+
+    @Transaction
+    suspend fun replaceAll(users: List<UserEntity>) {
+        deleteAll()
+        insertAll(users)
+    }
+}
+```
+
+<Callout type="warn" title="Flow 返回值不加 suspend">
+
+```kt
+// ✅ Flow 本身是冷的，收集时才执行查询
+fun observeAll(): Flow<List<UserEntity>>
+
+// ❌ 编译错误：Room 不允许 suspend + Flow
+suspend fun observeAll(): Flow<List<UserEntity>>
+```
+
+因为 `Flow` **本身就代表异步**（见 [8.6](/docs/08-coroutines/flow) 的冷流语义）——
+获取这个 Flow 对象是同步的，真正的查询发生在 `collect` 时。
+
+而 `suspend fun` 返回单个值时才需要挂起。
+
+</Callout>
+
+<Callout type="tip">
+
+Room 的 `suspend` 方法和 `Flow` 都是**主线程安全**的（内部会切到自己的
+Executor），所以**不需要**再包 `withContext(Dispatchers.IO)`——
+见 [8.5](/docs/08-coroutines/context-and-dispatchers)。
+
+上面 Repository 里的 `flowOn(io)` 是给 `map { }` 那步的领域模型转换用的，
+不是给查询用的。
+
+</Callout>
+
+## 3. 分层的数据模型
+
+```kt
+// 数据层：数据库实体
+@Entity(tableName = "users")
+data class UserEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val avatarUrl: String?,
+    val updatedAt: Long,
+)
+
+// 数据层：网络 DTO
+@Serializable
+data class UserDto(
+    val id: String,
+    @SerialName("user_name") val name: String,
+    @SerialName("avatar") val avatarUrl: String? = null,
+)
+
+// 领域层
+data class User(
+    val id: String,
+    val name: String,
+    val avatarUrl: String?,
+)
+
+// 映射
+fun UserDto.toEntity() = UserEntity(id, name, avatarUrl, System.currentTimeMillis())
+fun UserEntity.toDomain() = User(id, name, avatarUrl)
+```
+
+<Callout type="tip" title="三层模型值不值得">
+
+小项目里可以只用一层。但一旦出现这些情况就该分：
+
+- 后端字段和 UI 需要的形状不一致
+- 数据库需要额外字段（`updatedAt`、`isSynced`）
+- 同一份数据有多个来源
+
+映射函数写成**扩展函数**（见 [4.6](/docs/04-classes/extensions)）而不是成员方法，
+可以让 DTO 保持纯净、不依赖领域层——依赖方向由 import 决定，而不是由类定义决定。
+
+</Callout>
+
+## 4. kotlinx.serialization 优于 Gson
+
+```kt
+@Serializable
+data class UserDto(
+    val id: String,
+    @SerialName("user_name") val name: String,
+    val avatarUrl: String? = null,          // 默认值会生效
+)
+```
+
+| | Gson | kotlinx.serialization |
+| --- | --- | --- |
+| 走构造函数 | ❌ 用 `Unsafe` 绕过 | ✅ |
+| 默认参数生效 | ❌ | ✅ |
+| 校验非空类型 | ❌ 会给你 null | ✅ 缺字段直接报错 |
+| 需要 `@Keep` | ✅ | ❌（编译期生成） |
+| 注解前缀 | 要 `@field:` | 不需要 |
+
+<Callout type="warn" title="Gson 的坑值得再强调一次">
+
+```kt
+data class Config(val name: String, val timeout: Int = 5000)
+// Gson 解析 {"name": "a"}  → timeout 是 0，不是 5000
+// Gson 解析 {}             → name 是 null，尽管类型声明为非空 String
+```
+
+拿到一个「类型上不可能为 null，运行时却是 null」的对象，
+NPE 会在毫不相关的地方爆出来。见
+[4.7 数据类](/docs/04-classes/data-classes) 和 [9.1 注解](/docs/09-advanced/annotations)。
+
+</Callout>
+
+## 5. DataStore 取代 SharedPreferences
+
+```kt
+private val Context.dataStore by preferencesDataStore(name = "settings")
+
+class SettingsRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
+) {
+    private object Keys {
+        val THEME = stringPreferencesKey("theme")
+        val NOTIFICATIONS = booleanPreferencesKey("notifications")
+    }
+
+    val theme: Flow<String> = context.dataStore.data
+        .catch { e ->
+            if (e is IOException) emit(emptyPreferences()) else throw e
+        }
+        .map { prefs -> prefs[Keys.THEME] ?: "system" }
+
+    suspend fun setTheme(value: String) {
+        context.dataStore.edit { it[Keys.THEME] = value }
+    }
+}
+```
+
+三处 Kotlin 特性：
+
+- `by preferencesDataStore(...)` 是**属性委托**（见 [4.13](/docs/04-classes/delegation)）
+- 读取返回 `Flow`，写入是 `suspend fun`——天然主线程安全
+- `catch { }` 是 Flow 的异常处理（见 [8.8](/docs/08-coroutines/exception-handling)）
+
+<Callout type="warn" title="SharedPreferences 是阻塞的">
+
+`SharedPreferences.getString()` 会阻塞主线程读磁盘（首次加载时尤其明显），
+`commit()` 更是同步写盘。这是很多 App 启动慢和 ANR 的隐藏原因。
+
+DataStore 从 API 设计上就杜绝了这个问题——**读是 Flow，写是 suspend**，
+根本没法在主线程同步调用。
+
+</Callout>
+
+## 6. Paging 3 与 Flow
+
+```kt
+class UserRepository @Inject constructor(private val api: ApiService) {
+
+    fun pagedUsers(): Flow<PagingData<User>> = Pager(
+        config = PagingConfig(pageSize = 20, enablePlaceholders = false),
+        pagingSourceFactory = { UserPagingSource(api) },
+    ).flow.map { pagingData ->
+        pagingData.map { it.toDomain() }      // PagingData 也有 map
+    }
+}
+
+class UserViewModel @Inject constructor(repo: UserRepository) : ViewModel() {
+    val users: Flow<PagingData<User>> = repo.pagedUsers()
+        .cachedIn(viewModelScope)             // ← 关键
+}
+```
+
+<Callout type="warn" title="cachedIn 不是可选的">
+
+不加 `cachedIn(viewModelScope)` 的后果：
+
+- 屏幕旋转后**重新加载第一页**，用户滚动位置和已加载数据全丢
+- 多个收集者会各自触发一遍加载
+
+`cachedIn` 把这个冷流转成在指定作用域内**共享且缓存**的流——
+本质上是 [8.6](/docs/08-coroutines/flow) 里 `shareIn` 的专用版本。
+
+</Callout>
+
+Compose 里的收集：
+
+```kt
+@Composable
+fun UserList(viewModel: UserViewModel = hiltViewModel()) {
+    val items = viewModel.users.collectAsLazyPagingItems()
+
+    LazyColumn {
+        items(items.itemCount, key = items.itemKey { it.id }) { index ->
+            items[index]?.let { UserCard(it) }
+        }
+
+        // 加载状态也是数据的一部分
+        when (val state = items.loadState.append) {
+            is LoadState.Loading -> item { LoadingRow() }
+            is LoadState.Error -> item { ErrorRow(state.error) { items.retry() } }
+            else -> Unit
+        }
+    }
+}
+```
+
+## 7. 网络层：Retrofit + 协程
+
+```kt
+interface ApiService {
+    @GET("users")
+    suspend fun getUsers(): List<UserDto>          // suspend，主线程安全
+
+    @GET("users/{id}")
+    suspend fun getUser(@Path("id") id: String): UserDto
+}
+```
+
+<Callout type="tip" title="错误建模：别让异常穿到 UI 层">
+
+```kt
+sealed interface DataResult<out T> {
+    data class Success<T>(val data: T) : DataResult<T>
+    data class Failure(val error: AppError) : DataResult<Nothing>
+}
+
+sealed interface AppError {
+    data object Network : AppError
+    data object Unauthorized : AppError
+    data class Server(val code: Int) : AppError
+    data class Unknown(val cause: Throwable) : AppError
+}
+
+suspend fun ApiService.safeGetUsers(): DataResult<List<UserDto>> = try {
+    DataResult.Success(getUsers())
+} catch (e: CancellationException) {
+    throw e                                        // ⚠️ 取消必须重抛
+} catch (e: IOException) {
+    DataResult.Failure(AppError.Network)
+} catch (e: HttpException) {
+    DataResult.Failure(
+        if (e.code() == 401) AppError.Unauthorized else AppError.Server(e.code())
+    )
+} catch (e: Exception) {
+    DataResult.Failure(AppError.Unknown(e))
+}
+```
+
+配合 `when` 的穷尽性检查（见 [4.8 密封类](/docs/04-classes/sealed-classes)），
+ViewModel 里每种错误都必须被显式处理——新增一种错误类型时，
+编译器会告诉你所有需要更新的地方。
+
+</Callout>
+
+## 8. 完整的一条链
+
+```kt
+// Repository：合并本地与远程
+class NewsRepository @Inject constructor(
+    private val dao: NewsDao,
+    private val api: NewsApi,
+    @IoDispatcher private val io: CoroutineDispatcher,
+) {
+    fun observeNews(category: String): Flow<List<News>> =
+        dao.observeByCategory(category)
+            .map { list -> list.map { it.toDomain() } }
+            .distinctUntilChanged()
+            .flowOn(io)
+
+    suspend fun refresh(category: String): DataResult<Unit> = withContext(io) {
+        api.safeGetNews(category).let { result ->
+            when (result) {
+                is DataResult.Success -> {
+                    dao.replaceCategory(category, result.data.map { it.toEntity() })
+                    DataResult.Success(Unit)
+                }
+                is DataResult.Failure -> result
+            }
+        }
+    }
+}
+
+// ViewModel：转成 UI 状态
+@HiltViewModel
+class NewsViewModel @Inject constructor(
+    private val repository: NewsRepository,
+    savedStateHandle: SavedStateHandle,
+) : ViewModel() {
+
+    private val category = savedStateHandle.getStateFlow("category", "tech")
+    private val _refreshing = MutableStateFlow(false)
+    private val _error = MutableStateFlow<AppError?>(null)
+
+    val uiState: StateFlow<NewsUiState> = combine(
+        category.flatMapLatest { repository.observeNews(it) },
+        _refreshing,
+        _error,
+    ) { news, refreshing, error ->
+        NewsUiState(news = news, isRefreshing = refreshing, error = error)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = NewsUiState(),
+    )
+}
+```
+
+这段代码里出现的每一个 Kotlin 特性，前面都讲过：
+`sealed`、`data class`、扩展函数、`Flow` 操作符、`combine`、
+`flatMapLatest`、`stateIn`、结构化并发。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      为什么 Room 的 <code>Flow</code> 返回值不能加 <code>suspend</code>？
+    </>
+  }
+  options={[
+    'Room 的限制，没有原因',
+    '因为 Flow 本身就代表异步：拿到 Flow 对象是同步的，真正的查询发生在 collect 时',
+    '因为 Flow 不支持挂起',
+    '其实可以加',
+  ]}
+  answer={1}
+>
+
+`Flow` 是**冷流**（见 [8.6](/docs/08-coroutines/flow)）——
+`dao.observeAll()` 只是返回一个「怎么查询」的描述对象，这一步是同步的、瞬间完成的；
+真正的数据库查询发生在 `collect` 的时候。
+
+而 `suspend fun` 的语义是「这次调用本身可能耗时，需要挂起」——
+用在返回 `Flow` 的方法上是语义矛盾，所以 Room 直接禁止。
+
+对比：`suspend fun getById(id): UserEntity?` 返回**单个值**，
+这次调用确实要等查询完成，所以需要 `suspend`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      Paging 3 里不加 <code>cachedIn(viewModelScope)</code> 会怎样？
+    </>
+  }
+  options={[
+    '没有影响',
+    '屏幕旋转后重新加载第一页，已加载数据和滚动位置全丢；多个收集者会各自触发加载',
+    '编译错误',
+    '分页大小会失效',
+  ]}
+  answer={1}
+>
+
+`Pager.flow` 是**冷流**：每个收集者都会触发一次独立的加载。
+
+屏幕旋转时 Compose/Fragment 重建，重新收集这个冷流 → 从第一页重新加载，
+用户滚了半天的位置和数据全没了。
+
+`cachedIn(viewModelScope)` 把它转成在 ViewModel 作用域内**共享且缓存**的流，
+旋转后重新收集拿到的是缓存的分页数据。
+
+本质上是 `shareIn` 的专用版本——同一个「冷流转热流」的问题。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="为什么 DataStore 比 SharedPreferences 更适合现代 Android？"
+  options={[
+    '存储容量更大',
+    'API 设计上就是异步的（读返回 Flow、写是 suspend），杜绝了主线程阻塞 I/O',
+    '支持更多数据类型',
+    '不需要 Context',
+  ]}
+  answer={1}
+>
+
+`SharedPreferences` 的 `getString()` 会**阻塞主线程读磁盘**（首次加载整个 XML），
+`commit()` 是同步写盘。这是很多 App 冷启动慢和 ANR 的隐藏原因，
+而且因为 API 长得像普通取值，很容易被忽略。
+
+DataStore 从**类型层面**杜绝了这个问题：
+
+- 读 → `Flow<Preferences>`，只能在协程里收集
+- 写 → `suspend fun edit { }`，只能在协程里调用
+
+你**没办法**在主线程同步调用它。这是「用类型系统防止误用」的好例子。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="「单一数据源」模式下，UI 应该观察什么？"
+  options={[
+    '同时观察网络和数据库',
+    '只观察数据库（Room 的 Flow）；网络请求只负责更新数据库，Flow 自动发射新值',
+    '只观察网络',
+    '每次手动刷新',
+  ]}
+  answer={1}
+>
+
+**UI 只观察数据库**，网络只负责往数据库里写：
+
+```
+val users: Flow<List<User>> = dao.observeAll().map { ... }     // UI 观察这个
+
+suspend fun refresh() {
+    val fresh = api.getUsers()
+    dao.replaceAll(fresh)      // 写入后 observeAll() 自动发射，UI 自动更新
+}
+```
+
+三个好处：
+
+- **离线可用**——网络失败时数据库的旧数据还在，UI 有内容可显示
+- **无需手动通知**——Room 的 `Flow` 在表变化时自动重新查询
+- **单一真相**——列表页和详情页看到的一定是同一份数据
+
+这是 Android 官方架构指南的核心模式。
+
+</Quiz>
+
+## 官方参考
+
+- [应用架构指南 · 数据层](https://developer.android.com/topic/architecture/data-layer)
+- [Room 与协程](https://developer.android.com/training/data-storage/room/async-queries)
+- [DataStore](https://developer.android.com/topic/libraries/architecture/datastore)
+- [Paging 3](https://developer.android.com/topic/libraries/architecture/paging/v3-overview)

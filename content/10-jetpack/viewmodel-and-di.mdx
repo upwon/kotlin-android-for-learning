@@ -1,0 +1,425 @@
+ViewModel 和 Hilt 看起来是「框架的事」，但它们的 API 设计全部踩在 Kotlin 特性上：
+**构造函数注入**、**属性委托**、**结构化并发的作用域**。
+
+## 1. viewModelScope 是什么
+
+```kt
+class MyViewModel : ViewModel() {
+    fun load() {
+        viewModelScope.launch {
+            val data = repository.fetch()
+            _state.value = data
+        }
+    }
+}
+```
+
+它的实现极其简单：
+
+```kt
+// androidx.lifecycle 里的实现（简化）
+val ViewModel.viewModelScope: CoroutineScope
+    get() = getTag(KEY) ?: CloseableCoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate
+    ).also { setTagIfAbsent(KEY, it) }
+
+// ViewModel.onCleared() 时调用 scope.cancel()
+```
+
+三个设计决策，全是[第 8 部](/docs/08-coroutines/basics)讲过的：
+
+| 组成 | 为什么 |
+| --- | --- |
+| `SupervisorJob()` | 一个 `launch` 失败**不会**干掉 ViewModel 里其他协程（见 [8.8](/docs/08-coroutines/exception-handling)） |
+| `Dispatchers.Main.immediate` | 默认在主线程，且已在主线程时不多等一帧（见 [8.5](/docs/08-coroutines/context-and-dispatchers)） |
+| `onCleared()` 里 `cancel()` | ViewModel 销毁时自动取消所有子协程 |
+
+<Callout type="success">
+
+**你不需要写任何取消代码**——这就是结构化并发在 Android 上最直接的兑现。
+
+同理 `lifecycleScope`（绑定 Activity/Fragment）、
+`viewLifecycleOwner.lifecycleScope`（绑定 Fragment 的 View）。
+
+</Callout>
+
+## 2. by viewModels() 是属性委托
+
+```kt
+class MyFragment : Fragment() {
+    private val viewModel: MyViewModel by viewModels()
+    private val sharedViewModel: SharedViewModel by activityViewModels()
+}
+```
+
+这是 [4.13 委托](/docs/04-classes/delegation) + [4.9 泛型](/docs/04-classes/generics)
+的组合：
+
+```kt
+// 简化后的实现
+@MainThread
+inline fun <reified VM : ViewModel> Fragment.viewModels(
+    noinline ownerProducer: () -> ViewModelStoreOwner = { this },
+    noinline factoryProducer: (() -> ViewModelProvider.Factory)? = null,
+): Lazy<VM> = createViewModelLazy(VM::class, ...)
+```
+
+拆开看：
+
+- **`inline` + `reified VM`** → 才能写出 `VM::class`，不用传 `MyViewModel::class.java`
+  （见 [4.9 泛型](/docs/04-classes/generics)）
+- **返回 `Lazy<VM>`** → 所以能用 `by`，第一次访问时才真正去 `ViewModelProvider` 取
+- **`noinline` 参数** → 因为这些 lambda 要被存起来传给别的对象
+  （见 [5.3 内联函数](/docs/05-functional/inline-functions)）
+
+<Callout type="tip" title="为什么是 by lazy 而不是直接赋值">
+
+```kt
+// ❌ Fragment 的 onAttach 之前访问 ViewModelStore 会崩
+private val viewModel = ViewModelProvider(this)[MyViewModel::class.java]
+
+// ✅ 委托推迟到第一次访问（那时生命周期已经就绪）
+private val viewModel: MyViewModel by viewModels()
+```
+
+`by viewModels()` 返回的 `Lazy` 把获取时机推迟到了**第一次使用**，
+天然规避了「构造时生命周期还没准备好」的问题。
+
+这正是 [4.13](/docs/04-classes/delegation) 里 `by lazy` 的典型价值。
+
+</Callout>
+
+## 3. Compose 里的等价物
+
+```kt
+@Composable
+fun MyScreen(
+    viewModel: MyViewModel = viewModel(),          // 或 hiltViewModel()
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+}
+```
+
+同样是 `inline` + `reified`：
+
+```kt
+@Composable
+inline fun <reified VM : ViewModel> viewModel(...): VM
+```
+
+<Callout type="warn" title="别把 ViewModel 传给子 Composable">
+
+```kt
+// ❌ 子组件和 ViewModel 耦合，无法预览、无法复用
+@Composable
+fun UserCard(viewModel: MyViewModel) { ... }
+
+// ✅ 只传它需要的数据和回调
+@Composable
+fun UserCard(user: User, onFollowClick: () -> Unit) { ... }
+```
+
+这就是 [10.2](/docs/10-jetpack/compose-state) 讲的**状态提升**：
+ViewModel 只出现在**屏幕级**的 Composable 里，往下只传数据和 lambda。
+
+</Callout>
+
+## 4. Hilt 的构造函数注入
+
+```kt
+@HiltViewModel
+class UserViewModel @Inject constructor(
+    private val repository: UserRepository,
+    private val savedStateHandle: SavedStateHandle,
+) : ViewModel()
+```
+
+<Callout type="java" title="注意 @Inject 加在 constructor 上">
+
+```kt
+class Foo @Inject constructor(private val bar: Bar)
+```
+
+平时 Kotlin 允许省略 `constructor` 关键字（`class Foo(private val bar: Bar)`），
+但**给构造函数加注解或可见性修饰符时不能省**。见
+[4.1 类与构造函数](/docs/04-classes/classes)。
+
+</Callout>
+
+Hilt 的模块定义用到了 `object` 和限定符注解：
+
+```kt
+@Module
+@InstallIn(SingletonComponent::class)
+object NetworkModule {                       // object：单例，见 4.12
+
+    @Provides
+    @Singleton
+    fun provideOkHttp(): OkHttpClient = OkHttpClient.Builder().build()
+
+    @Provides
+    @Singleton
+    fun provideRetrofit(client: OkHttpClient): Retrofit =
+        Retrofit.Builder().client(client).baseUrl(BASE_URL).build()
+}
+
+// 用限定符区分同类型的不同实例
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class IoDispatcher
+
+@Module
+@InstallIn(SingletonComponent::class)
+object DispatcherModule {
+    @Provides
+    @IoDispatcher
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+}
+```
+
+<Callout type="success" title="注入 Dispatcher 是可测试性的关键">
+
+```kt
+class UserRepository @Inject constructor(
+    private val api: ApiService,
+    @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+) {
+    suspend fun getUser(id: String): User = withContext(ioDispatcher) {
+        api.fetch(id)
+    }
+}
+```
+
+测试时注入 `UnconfinedTestDispatcher()`，协程立即执行，不用等待——
+见 [8.5](/docs/08-coroutines/context-and-dispatchers) 和
+[10.8 测试](/docs/10-jetpack/testing)。
+
+`@Qualifier` 注解的 `@Retention(BINARY)` 是有意的：它只在编译期被 Hilt 处理，
+不需要运行时保留（见 [9.1 注解](/docs/09-advanced/annotations)）。
+
+</Callout>
+
+## 5. 接口绑定用 abstract class
+
+```kt
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class RepositoryModule {
+
+    @Binds
+    abstract fun bindUserRepository(impl: UserRepositoryImpl): UserRepository
+}
+```
+
+<Callout type="tip" title="为什么 @Binds 要用 abstract class 而不是 object">
+
+`@Provides` 需要**函数体**（你告诉 Hilt 怎么造对象），所以可以放在 `object` 里。
+
+`@Binds` 只是**声明一个映射**（接口 → 实现），没有函数体，
+所以必须是 `abstract fun`——而抽象方法只能存在于 `abstract class` 或 `interface` 里。
+
+Hilt 更推荐 `@Binds`：它生成的代码更少、编译更快。
+能用 `@Binds` 就别用 `@Provides`。
+
+</Callout>
+
+## 6. SavedStateHandle 与进程重建
+
+```kt
+@HiltViewModel
+class SearchViewModel @Inject constructor(
+    private val savedStateHandle: SavedStateHandle,
+    private val repository: SearchRepository,
+) : ViewModel() {
+
+    // 直接读写，会被保存到 Bundle
+    var query: String
+        get() = savedStateHandle["query"] ?: ""
+        set(value) { savedStateHandle["query"] = value }
+
+    // 转成 StateFlow
+    val results: StateFlow<List<Item>> = savedStateHandle
+        .getStateFlow("query", "")
+        .debounce(300)
+        .flatMapLatest { repository.search(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+}
+```
+
+<Callout type="warn" title="ViewModel 活不过进程被杀">
+
+三个层次要分清：
+
+| 场景 | ViewModel | SavedStateHandle |
+| --- | --- | --- |
+| 屏幕旋转 | ✅ 保留 | ✅ 保留 |
+| 返回栈中暂时不可见 | ✅ 保留 | ✅ 保留 |
+| **进程被系统杀掉后重建** | ❌ **丢失** | ✅ 保留（走 Bundle） |
+
+所以「用户输入了一半的表单」「当前筛选条件」这类应该放 `SavedStateHandle`，
+而缓存的列表数据放 ViewModel 普通字段就行（重建时重新加载即可）。
+
+`savedStateHandle[key]` 用的是 [5.4 操作符重载](/docs/05-functional/operator-overloading)
+的 `get`/`set` 约定。
+
+</Callout>
+
+## 7. 用纯 Kotlin 演示委托 + reified
+
+```kotlin
+import kotlin.reflect.KClass
+
+// 模拟 ViewModelStore
+class Store {
+    private val map = mutableMapOf<KClass<*>, Any>()
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T : Any> getOrCreate(cls: KClass<T>, factory: () -> T): T =
+        map.getOrPut(cls) { println("  创建 ${cls.simpleName}"); factory() } as T
+}
+
+open class VM
+class UserVM : VM() { val id = "user" }
+class OrderVM : VM() { val id = "order" }
+
+// inline + reified：调用方不用传 ::class
+inline fun <reified T : VM> Store.viewModels(noinline factory: () -> T): Lazy<T> =
+    lazy { getOrCreate(T::class, factory) }
+
+fun main() {
+    val store = Store()
+
+    val userVM: UserVM by store.viewModels { UserVM() }
+    val orderVM: OrderVM by store.viewModels { OrderVM() }
+
+    println("声明完成，还没有创建任何实例")
+    println("访问 userVM: ${userVM.id}")
+    println("再次访问 userVM: ${userVM.id}")     // 不再创建
+    println("访问 orderVM: ${orderVM.id}")
+}
+```
+
+跑一下能看到两件事：**声明时不创建**（`Lazy` 的作用），
+**同一个类型只创建一次**（`getOrPut` 的作用）——
+这就是 `by viewModels()` 的核心机制。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>viewModelScope</code> 为什么用 <code>SupervisorJob</code> 而不是普通 <code>Job</code>？
+    </>
+  }
+  options={[
+    '性能更好',
+    '这样一个 launch 里的异常不会取消 ViewModel 里其他正在运行的协程',
+    'SupervisorJob 支持更多协程',
+    '为了兼容 Java',
+  ]}
+  answer={1}
+>
+
+`viewModelScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)`。
+
+用普通 `Job` 的话，一个 `launch` 抛异常会**取消整个作用域**——
+ViewModel 里其他正在跑的加载任务全部被干掉，之后再 `launch` 也不会执行
+（作用域已取消）。
+
+`SupervisorJob` 让失败只影响自己，兄弟协程继续。这符合 ViewModel 的实际语义：
+「加载用户信息失败」不应该导致「加载订单列表」也停掉。
+
+见 [8.8 异常处理](/docs/08-coroutines/exception-handling)。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>by viewModels()</code> 用到了哪些 Kotlin 特性？
+    </>
+  }
+  options={[
+    '只是一个普通函数',
+    'inline + reified（才能写 VM::class）、返回 Lazy<VM>（才能用 by）、noinline（lambda 要被存起来）',
+    '反射',
+    '注解处理器',
+  ]}
+  answer={1}
+>
+
+三个特性叠在一起：
+
+- **`inline` + `reified VM`** → 函数内部能拿到 `VM::class`，
+  调用方不用写 `ViewModelProvider(this)[MyViewModel::class.java]`
+  （见 [4.9 泛型](/docs/04-classes/generics)）
+- **返回 `Lazy<VM>`** → 才能配合 `by` 使用，且把获取推迟到第一次访问
+  （见 [4.13 委托](/docs/04-classes/delegation)）
+- **`noinline` 参数** → `ownerProducer` 这类 lambda 要被存起来传给别的对象，
+  不能被内联（见 [5.3 内联函数](/docs/05-functional/inline-functions)）
+
+「推迟到第一次访问」还顺带解决了一个实际问题：Fragment 构造时
+生命周期还没就绪，直接获取 ViewModel 会崩。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      为什么 <code>@Binds</code> 必须写在 <code>abstract class</code> 里，而 <code>@Provides</code> 可以写在 <code>object</code> 里？
+    </>
+  }
+  options={[
+    'Hilt 的任意规定',
+    '@Binds 只声明「接口→实现」的映射，没有函数体，必须是 abstract fun；而抽象方法只能存在于 abstract class/interface 中',
+    'object 不支持注解',
+    '@Binds 性能更好所以要特殊处理',
+  ]}
+  answer={1}
+>
+
+- `@Provides` 需要**函数体**——你告诉 Hilt 「怎么构造这个对象」，
+  所以放在 `object` 里正好（`object` 的成员相当于静态方法）。
+- `@Binds` 只是**声明映射**（`UserRepository` 用 `UserRepositoryImpl` 实现），
+  没有函数体，必须写成 `abstract fun`。而抽象方法只能出现在
+  `abstract class` 或 `interface` 中。
+
+实践建议：**能用 `@Binds` 就别用 `@Provides`**——前者生成的代码更少、编译更快。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="什么样的状态应该放进 SavedStateHandle 而不是 ViewModel 的普通字段？"
+  options={[
+    '所有状态',
+    '进程被杀后重建时必须恢复的：用户输入到一半的表单、当前筛选条件、滚动位置',
+    '只有网络数据',
+    '不需要用 SavedStateHandle',
+  ]}
+  answer={1}
+>
+
+三个层次要分清：
+
+| 场景 | ViewModel 普通字段 | SavedStateHandle |
+| --- | --- | --- |
+| 屏幕旋转 | ✅ 保留 | ✅ 保留 |
+| 返回栈中暂时不可见 | ✅ 保留 | ✅ 保留 |
+| **进程被系统杀掉后重建** | ❌ **丢失** | ✅ 保留 |
+
+所以判断标准是：**这个状态丢了会不会让用户觉得「我刚才做的白做了」？**
+
+- 用户输入的表单内容、筛选条件、当前 Tab → `SavedStateHandle`
+- 从网络加载的列表数据 → 普通字段就行，重建时重新请求即可
+  （放进 Bundle 反而有 `TransactionTooLargeException` 的风险）
+
+</Quiz>
+
+## 官方参考
+
+- [ViewModel 概览](https://developer.android.com/topic/libraries/architecture/viewmodel)
+- [Hilt 依赖注入](https://developer.android.com/training/dependency-injection/hilt-android)

@@ -1,0 +1,366 @@
+<Callout type="note" title="这一部讲什么、不讲什么">
+
+**不讲**：Compose 有哪些组件、Modifier 有哪些方法、Navigation 怎么配置——
+这些[官方文档](https://developer.android.com/jetpack/compose)写得更好，而且更新更快。
+
+**只讲**：Compose 和 Jetpack 的写法**为什么长这样**，它们建立在哪些 Kotlin 语言特性之上。
+这些机制比 API 稳定得多，理解了它们，读官方文档会快很多，遇到怪现象也能自己推断原因。
+
+前置知识是本站第 4、5、8 部。
+
+</Callout>
+
+## 1. `@Composable` 不是普通注解
+
+```kt
+@Composable
+fun Greeting(name: String) {
+    Text("你好，$name")
+}
+```
+
+看起来像个普通的注解，实际上它触发了**编译器插件**——Compose Compiler 会重写这个函数：
+
+```kt
+// 概念上，编译后变成
+fun Greeting(name: String, $composer: Composer, $changed: Int) {
+    // 判断 name 是否变化、决定是否跳过重组
+    // 在 $composer 里登记这次调用的位置和状态
+}
+```
+
+<Callout type="java" title="和 suspend 是同一类机制">
+
+回想 [8.1](/docs/08-coroutines/async-overview)：`suspend` 函数被编译器改写成
+接收 `Continuation` 参数的状态机。
+
+`@Composable` 用的是同一套思路——**编译器给函数偷偷加了一个参数**：
+
+| | 加了什么参数 | 作用 |
+| --- | --- | --- |
+| `suspend fun` | `Continuation` | 记录「从哪里恢复」 |
+| `@Composable fun` | `Composer` | 记录「这次调用在 UI 树的哪个位置、状态是什么」 |
+
+由此推出同样的**传染性**：`@Composable` 函数只能被 `@Composable` 函数调用，
+因为调用方要提供那个 `Composer`。
+
+这个传染性同样是优点：它在类型层面标记出了「这段代码参与 UI 组合」。
+
+</Callout>
+
+## 2. 为什么能嵌套写 UI
+
+```kt
+Column {
+    Text("标题")
+    Row {
+        Button(onClick = { }) { Text("确定") }
+    }
+}
+```
+
+这不是新语法，是 [9.4 类型安全构建器](/docs/09-advanced/type-safe-builders)
+讲的**带接收者的 lambda** + **尾随 lambda**：
+
+```kt
+// Column 的签名（简化）
+@Composable
+fun Column(
+    modifier: Modifier = Modifier,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start,
+    content: @Composable ColumnScope.() -> Unit,     // ← 关键在这里
+)
+```
+
+三个 Kotlin 特性凑在一起：
+
+1. **`content` 是最后一个参数** → 可以用尾随 lambda 语法挪到括号外
+2. **括号里没别的参数时括号可省** → `Column { }`
+3. **类型是 `ColumnScope.() -> Unit`** → lambda 内 `ColumnScope` 成为隐式 `this`，
+   所以能直接写 `Modifier.weight(1f)`（那是 `ColumnScope` 的扩展）
+
+<Callout type="tip" title="ColumnScope 存在的意义">
+
+```kt
+Column {
+    Text("A", Modifier.weight(1f))     // ✅ weight 是 ColumnScope 的扩展
+}
+
+Box {
+    Text("A", Modifier.weight(1f))     // ❌ 编译错误，BoxScope 里没有 weight
+}
+```
+
+`weight` 只在 `Column`/`Row` 里有意义，所以它被定义成 `ColumnScope`/`RowScope`
+的扩展函数——**编译期就能拒绝用错的地方**。
+
+这正是 [4.6 扩展](/docs/04-classes/extensions)里「在类内部定义扩展函数」
+那个双接收者能力的实际应用。
+
+</Callout>
+
+## 3. 默认参数取代了 Builder
+
+```kt
+// Compose
+Text(
+    text = "标题",
+    color = Color.Red,
+    fontSize = 18.sp,
+    maxLines = 2,
+)
+
+// View 体系里的等价物
+val tv = TextView(context).apply {
+    text = "标题"
+    setTextColor(Color.RED)
+    textSize = 18f
+    maxLines = 2
+}
+```
+
+`Text` 有二十多个参数，**全部有默认值**——这就是
+[1.3 函数](/docs/01-basics/functions)讲的默认参数 + 具名实参。
+
+没有这两个特性，Compose 就只能走 Builder 模式，写法会难看得多。
+
+<Callout type="warn" title="所以别给 Composable 写重载">
+
+```kt
+// ❌ Java 思维
+@Composable fun MyButton(text: String) { }
+@Composable fun MyButton(text: String, enabled: Boolean) { }
+
+// ✅ 默认参数
+@Composable
+fun MyButton(
+    text: String,
+    modifier: Modifier = Modifier,      // 约定：modifier 永远是第一个可选参数
+    enabled: Boolean = true,
+    onClick: () -> Unit = {},
+) { }
+```
+
+Compose 的官方 API 约定里有一条：**`modifier: Modifier = Modifier` 必须是
+第一个可选参数**——这样调用方 `MyButton("确定", Modifier.padding(8.dp))`
+可以不写参数名。
+
+</Callout>
+
+## 4. 函数而不是类
+
+View 体系里一个组件是一个**类**（有构造函数、有状态、有生命周期）；
+Compose 里一个组件是一个**函数**。
+
+```kt
+@Composable
+fun UserCard(user: User, onClick: () -> Unit) {
+    Card(onClick = onClick) {
+        Column {
+            Text(user.name)
+            Text(user.email)
+        }
+    }
+}
+```
+
+这带来几条直接后果：
+
+| | View | Compose |
+| --- | --- | --- |
+| 组件是什么 | 类的实例 | 函数调用 |
+| 状态存在哪 | 实例字段 | `remember`（见 [10.2](/docs/10-jetpack/compose-state)） |
+| 复用 | 继承 / 组合 | **直接调用函数** |
+| 传数据 | setter | **参数** |
+| 传回调 | 接口 / 监听器 | **函数类型参数** |
+
+<Callout type="success">
+
+「组件即函数」让 Kotlin 的函数特性直接可用：默认参数、具名实参、
+函数类型、高阶函数、扩展函数——**你不需要学一套新的组件模型**。
+
+这也是为什么 Compose 的学习曲线里，Kotlin 熟练度的权重那么高。
+
+</Callout>
+
+## 5. 命名约定
+
+Compose 的命名规则和普通 Kotlin 函数不同，这是社区约定不是语言规则：
+
+| 类型 | 规则 | 例子 |
+| --- | --- | --- |
+| 发射 UI 的 Composable | **大驼峰**，名词 | `Text`、`UserCard` |
+| 返回值的 Composable | 小驼峰，名词 | `rememberScrollState()` |
+| 不发射 UI 也不返回值 | 小驼峰，动词 | — |
+
+<Callout type="warn">
+
+「发射 UI 的用大驼峰」违反了 [1.5 编码规范](/docs/01-basics/coding-conventions)
+里「函数用小驼峰」的规则——这是 Compose 刻意做的例外，
+让调用点读起来像在**声明 UI 元素**而不是在调用函数。
+
+ktlint 有专门的规则集处理这个例外，别让它把你的 Composable 全改成小写。
+
+</Callout>
+
+## 6. 一段可以运行的等价演示
+
+Compose 需要 Android 环境跑不了，但它的核心机制可以用纯 Kotlin 演示：
+
+```kotlin
+// 用带接收者的 lambda 模拟 Compose 的嵌套 DSL
+class UiScope {
+    private val sb = StringBuilder()
+    private var indent = 0
+
+    fun text(value: String) {
+        sb.append("  ".repeat(indent)).append("Text(\"$value\")\n")
+    }
+
+    fun column(content: UiScope.() -> Unit) {
+        sb.append("  ".repeat(indent)).append("Column {\n")
+        indent++
+        content()
+        indent--
+        sb.append("  ".repeat(indent)).append("}\n")
+    }
+
+    override fun toString() = sb.toString()
+}
+
+fun ui(content: UiScope.() -> Unit): String = UiScope().apply(content).toString()
+
+fun main() {
+    print(ui {
+        column {
+            text("标题")
+            column {
+                text("嵌套内容")
+            }
+        }
+    })
+}
+```
+
+结构和 Compose 完全一致——差别只在于 Compose 的 `Composer` 还负责
+记录位置、比较参数、决定是否跳过重组。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>@Composable</code> 和 <code>suspend</code> 在实现机制上有什么共同点？
+    </>
+  }
+  options={[
+    '没有共同点',
+    '都由编译器给函数偷偷加了一个隐藏参数（Composer / Continuation），因此都具有传染性',
+    '都是运行时反射',
+    '都会创建新线程',
+  ]}
+  answer={1}
+>
+
+两者都是**编译器改写**函数签名：
+
+| | 加的隐藏参数 | 作用 |
+| --- | --- | --- |
+| `suspend fun` | `Continuation` | 记录「从哪里恢复执行」 |
+| `@Composable fun` | `Composer` | 记录「在 UI 树的哪个位置、状态是什么」 |
+
+由此推出同样的**传染性**：调用方必须能提供那个隐藏参数，
+所以 `@Composable` 只能被 `@Composable` 调用，`suspend` 只能被 `suspend`
+或协程调用。
+
+理解这个类比之后，Compose 的很多「奇怪限制」就变得可推导了。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>Column {'{'} Text("A") {'}'}</code> 这种写法靠的是哪些 Kotlin 特性？
+    </>
+  }
+  options={[
+    '这是 Compose 的新语法',
+    '尾随 lambda + 带接收者的函数类型 ColumnScope.() -> Unit + 括号可省略',
+    '注解处理器生成的',
+    '运算符重载',
+  ]}
+  answer={1}
+>
+
+三个已有特性的组合，没有任何新语法：
+
+1. `content` 是**最后一个参数** → 尾随 lambda 可以挪到括号外
+2. 括号里没有其他实参 → 括号整个省掉
+3. 类型是 `@Composable ColumnScope.() -> Unit` → **带接收者的 lambda**，
+   `ColumnScope` 成为隐式 `this`
+
+第 3 点还顺带解决了作用域问题：`Modifier.weight()` 是 `ColumnScope` 的扩展，
+所以在 `Box { }` 里用会**编译报错**——用错地方在编译期就被拒绝。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      为什么 Compose 的 API 约定要求 <code>modifier: Modifier = Modifier</code> 是第一个可选参数？
+    </>
+  }
+  options={[
+    '为了性能',
+    '这样调用方可以按位置传 modifier 而不必写参数名，如 MyButton("确定", Modifier.padding(8.dp))',
+    '编译器要求',
+    '为了 Java 互操作',
+  ]}
+  answer={1}
+>
+
+纯粹是**调用点的人体工学**。`modifier` 是最常被覆盖的参数，
+放在第一个可选位置意味着可以按位置传：
+
+```
+MyButton("确定", Modifier.padding(8.dp))          // 不用写 modifier =
+```
+
+如果它排在 `enabled`、`colors` 后面，调用方每次都得写 `modifier = ...`。
+
+这也是为什么写自定义 Composable 时应该遵守这个约定——你的组件会和官方组件
+混在一起用，风格不一致会很别扭。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="Compose 里「组件是函数而不是类」，带来的最直接的好处是什么？"
+  options={[
+    '性能更好',
+    'Kotlin 的函数特性（默认参数、具名实参、函数类型、扩展函数）可以直接复用，不需要学新的组件模型',
+    '代码更少',
+    '支持热重载',
+  ]}
+  answer={1}
+>
+
+「组件即函数」意味着**组件复用就是函数调用、传数据就是传参数、传回调就是传函数类型**——
+这些你在第 1、5 部已经学过了。
+
+对比 View 体系：组件是类，要理解构造函数重载、属性 setter、
+监听器接口、生命周期回调，是一套独立的模型。
+
+这也解释了一个现象：Kotlin 基础扎实的人学 Compose 会快很多，
+因为大半的「新知识」其实是已有知识的应用。
+
+</Quiz>
+
+## 官方参考
+
+- [Compose 编程思想](https://developer.android.com/jetpack/compose/mental-model)
+- [Compose API 准则](https://github.com/androidx/androidx/blob/androidx-main/compose/docs/compose-api-guidelines.md)
