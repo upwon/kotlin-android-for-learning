@@ -1,21 +1,295 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 3.2 返回与跳转（label、break/continue）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一课解决一个具体的困惑：**为什么 `forEach` 里不能写 `break`，而 `return` 又会把整个函数返回掉？**
+答案牵涉到 Kotlin 的「非局部返回」，这是 Java 匿名内部类完全没有的行为。
+
+## 1. 三种跳转
+
+`return`、`break`、`continue`，语义和 Java 一致——**但只在真正的循环里**。
+
+```kotlin
+fun main() {
+    for (i in 1..10) {
+        if (i == 3) continue
+        if (i == 6) break
+        print("$i ")
+    }
+}
+```
+
+## 2. 标签：给循环起名字
+
+Java 的标签写作 `outer:`，Kotlin 写作 `outer@`：
+
+```kotlin
+fun main() {
+    outer@ for (i in 1..3) {
+        for (j in 1..3) {
+            if (j == 2) continue@outer   // 跳到外层的下一轮
+            if (i == 3) break@outer      // 直接跳出外层
+            print("($i,$j) ")
+        }
+    }
+}
+```
+
+`break@outer` 跳出被标记的循环，`continue@outer` 进入被标记循环的下一轮。
+没有标签时，两者作用于**最内层**的循环。
+
+## 3. lambda 里的 return 是「非局部返回」
+
+这是本课的核心。
+
+```kotlin
+fun findFirstEven(numbers: List<Int>): Int? {
+    numbers.forEach {
+        if (it % 2 == 0) {
+            return it        // ← 注意：返回的是 findFirstEven，不是 lambda
+        }
+    }
+    return null
+}
+
+fun main() {
+    println(findFirstEven(listOf(1, 3, 4, 5, 6)))
+}
+```
+
+`return it` 直接结束了 `findFirstEven` 整个函数。这叫**非局部返回** non-local return。
+
+<Callout type="java" title="Java 里做不到这件事">
+
+Java 的 lambda 编译成匿名类的实例，`return` 只能返回那个匿名方法。
+Kotlin 之所以能穿透，是因为 `forEach` 是 **inline 函数**——
+它的代码在编译期被直接嵌入到调用处，lambda 体成了 `findFirstEven` 函数体的一部分，
+所以 `return` 自然就返回外层函数。
+
+推论：**只有内联函数的 lambda 才允许非局部返回。** 非内联的高阶函数里写裸 `return`
+会编译报错，编译器会提示你用 `return@label`。
+
 </Callout>
 
-## 学习提纲
+## 4. return@label：只返回 lambda
 
-- 三种跳转：return / break / continue
-- 标签 label@ 与限定 break
-- lambda 中的 return 是「非局部返回」
-- return@forEach / return@label 的用法
+想只结束当前这一次 lambda 调用（相当于 `continue`），用限定返回：
 
-## 与 Java / Android 的关键差异
+```kotlin
+fun main() {
+    println("--- return@forEach 相当于 continue ---")
+    listOf(1, 2, 3, 4, 5).forEach {
+        if (it == 3) return@forEach     // 只跳过这一次
+        print("$it ")
+    }
+    println()
 
-lambda 里直接 return 会返回外层函数，这是 Java 匿名类没有的行为。
+    println("--- 自定义标签 ---")
+    listOf(1, 2, 3).forEach loop@{
+        if (it == 2) return@loop
+        print("$it ")
+    }
+    println()
+
+    println("--- 匿名函数：return 就是局部的 ---")
+    listOf(1, 2, 3, 4).forEach(fun(value: Int) {
+        if (value == 3) return          // 匿名函数里的 return 只返回匿名函数
+        print("$value ")
+    })
+}
+```
+
+默认标签名就是**调用它的函数名**（`forEach`、`let`、`map`…）。
+
+<Callout type="warn" title="forEach 里没有 break 的等价物">
+
+`return@forEach` 只能模拟 `continue`。想提前**终止**遍历，有几种做法：
+
+```kotlin
+fun main() {
+    val list = listOf(1, 2, 3, 4, 5)
+
+    // 1. 用 first / firstOrNull —— 语义最准
+    println(list.firstOrNull { it > 3 })
+
+    // 2. 用 takeWhile —— 需要前面所有元素时
+    println(list.takeWhile { it < 4 })
+
+    // 3. 用 any / all / none —— 只要布尔结果
+    println(list.any { it > 4 })
+
+    // 4. 实在要遍历+提前退出，用 for
+    for (x in list) {
+        if (x > 3) break
+        print("$x ")
+    }
+}
+```
+
+**别为了「用上函数式风格」而硬套 `forEach`**。需要 `break` 时，`for` 就是最好的答案。
+
+</Callout>
+
+## 5. 一个真实的坑
+
+```kotlin
+// ❌ 意图是「跳过无效项」，实际是「遇到第一个无效项就整个函数返回」
+fun processBad(items: List<String>): List<String> {
+    val result = mutableListOf<String>()
+    items.forEach {
+        if (it.isBlank()) return result   // 直接返回了！
+        result += it.uppercase()
+    }
+    return result
+}
+
+// ✅ 正确写法
+fun processGood(items: List<String>): List<String> {
+    val result = mutableListOf<String>()
+    items.forEach {
+        if (it.isBlank()) return@forEach  // 跳过这一项
+        result += it.uppercase()
+    }
+    return result
+}
+
+fun main() {
+    val input = listOf("a", "", "b", "c")
+    println("Bad : ${processBad(input)}")
+    println("Good: ${processGood(input)}")
+}
+```
+
+<Callout type="warn">
+
+这个 bug 特别隐蔽，因为**两种写法都能编译**，只在数据里出现空白项时才暴露。
+Android 上典型的表现是「列表数据莫名其妙少了一半」。
+
+IDE 会在 `return` 上给一个不起眼的图标提示这是非局部返回，但很容易忽略。
+**看到 lambda 里的裸 `return`，先停下来确认一下意图。**
+
+</Callout>
+
+## 6. Android 场景
+
+```kt
+// 校验：非局部返回正好合适
+fun submit() {
+    listOf(nameField, emailField, phoneField).forEach { field ->
+        if (field.text.isNullOrBlank()) {
+            showError("${field.hint} 不能为空")
+            return          // ✅ 有意为之：校验失败就不继续了
+        }
+    }
+    doSubmit()
+}
+
+// 找第一个匹配项：别用 forEach + return
+val target = adapter.items.firstOrNull { it.id == targetId }   // ✅
+```
+
+<Callout type="tip">
+
+判断标准很简单：**你想结束的是「这一次迭代」还是「整个函数」？**
+
+- 这一次迭代 → `return@forEach`，或者干脆换成 `filter` / `mapNotNull`
+- 整个函数 → 裸 `return`，但最好加个注释说明这是有意的
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>fun f(list: List&lt;Int&gt;) {'{'} list.forEach {'{'} if (it == 2) return; print(it) {'}'}; print("end") {'}'}</code>
+      <br />
+      对 <code>listOf(1,2,3)</code> 调用，输出是什么？
+    </>
+  }
+  options={['123end', '13end', '1', '1end']}
+  answer={2}
+>
+
+输出 `1`。
+
+`forEach` 是内联函数，所以 lambda 里的裸 `return` 是**非局部返回**——
+它返回的是 `f` 这整个函数，不是 lambda。
+
+于是：打印 1 → 遇到 2 → 直接从 `f` 返回 → `print("end")` 根本没执行。
+
+想要 `13end`，把 `return` 改成 `return@forEach`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="为什么 Kotlin 的 lambda 能做非局部返回，而 Java 的 lambda 不能？"
+  options={[
+    '因为 Kotlin 编译器更聪明',
+    '因为 forEach 等是 inline 函数，lambda 体在编译期被嵌入调用处，成了外层函数体的一部分',
+    '因为 Kotlin 的 lambda 是协程',
+    '因为 Java 的 lambda 是 final 的',
+  ]}
+  answer={1}
+>
+
+关键在 **inline**。`forEach` 被标记为 `inline`，编译时它的函数体和传入的 lambda
+会被直接展开到调用处——lambda 里的代码字面上就成了外层函数的一部分，
+所以 `return` 返回外层函数是自然的。
+
+Java 的 lambda 编译成匿名类实例，`return` 只能返回那个方法。
+
+推论很重要：**非内联的高阶函数不允许裸 `return`**。你自己写一个非 inline 的
+`fun myForEach(f: (Int) -> Unit)`，在传给它的 lambda 里写 `return` 会直接编译报错。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="想在 forEach 中途终止整个遍历（相当于 break），应该怎么做？"
+  options={[
+    '用 break',
+    '用 return@forEach',
+    'forEach 做不到，应该换成 for 循环，或者用 firstOrNull / takeWhile / any 等语义更准的函数',
+    '用 return@loop',
+  ]}
+  answer={2}
+>
+
+`forEach` **没有 break 的等价物**。`return@forEach` 只相当于 `continue`——跳过这一次，
+继续下一次。
+
+正确做法按意图选：
+
+- 找第一个满足条件的 → `firstOrNull { }`
+- 取到某个条件为止的所有元素 → `takeWhile { }`
+- 只要布尔结果 → `any { }` / `all { }` / `none { }`
+- 确实要遍历并提前退出 → 老老实实用 `for` + `break`
+
+「函数式风格」不是目的。需要 `break` 时 `for` 就是最合适的工具。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="fill"
+  question="在 forEach 的 lambda 里跳过当前这一项、继续下一项，应该写什么？"
+  answer={['return@forEach', 'return@forEach']}
+>
+
+`return@forEach`。
+
+标签的默认名字就是**调用它的那个函数名**，所以在 `let` 里是 `return@let`，
+在 `map` 里是 `return@map`。也可以自己起名：`forEach loop@{ ... return@loop ... }`。
+
+另一种得到局部返回的方式是用**匿名函数**代替 lambda——匿名函数里的 `return`
+天然只返回它自己：
+
+```
+list.forEach(fun(v: Int) { if (v == 3) return; print(v) })
+```
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[returns](https://book.kotlincn.net/text/returns.html)
-- 官方英文：[returns](https://kotlinlang.org/docs/returns.html)
+- 官方英文：[returns](https://kotlinlang.org/docs/returns.html) ／ [inline-functions](https://kotlinlang.org/docs/inline-functions.html)

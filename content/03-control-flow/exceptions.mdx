@@ -1,20 +1,346 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 3.3 异常」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Kotlin **没有受检异常**（checked exception）。这个决定的影响比它听起来大：
+它去掉了 Java 里大量的样板 `try-catch`，但也意味着编译器不再帮你记住「这里会抛什么」。
+
+## 1. 没有受检异常
+
+```kt
+// Java：必须处理或声明抛出
+public void read() throws IOException {
+    Files.readAllLines(path);   // 不 try/catch 就必须 throws
+}
+
+// Kotlin：编译器完全不管
+fun read() {
+    File("a.txt").readLines()   // 不需要 try/catch，也不需要 throws
+}
+```
+
+<Callout type="java" title="为什么砍掉它">
+
+Java 的受检异常在实践中被大规模滥用成了这样：
+
+```java
+try {
+    doSomething();
+} catch (SomeException e) {
+    // TODO
+}
+```
+
+空 catch 块吞掉异常，反而比不检查更危险。而且它和泛型、lambda 配合极差——
+这就是为什么 Java 的 `Stream` API 里没法直接调用会抛受检异常的方法。
+
+Kotlin 的立场是：**异常处理是设计决策，不是编译器该强制的事。**
+
 </Callout>
 
-## 学习提纲
+代价也很实在：调用一个方法时，你**不再能从签名看出它会抛什么**。
+所以在 Kotlin 里，「这个函数可能失败」应该通过**返回类型**表达，而不是靠异常。这是第 4 节的内容。
 
-- try 是表达式，可以有返回值
-- 没有 checked exception 带来的影响
-- @Throws 与 Java 互操作
-- Nothing 类型与 TODO()
-- runCatching / Result 的取舍
+## 2. try 是表达式
 
-## 与 Java / Android 的关键差异
+```kotlin
+fun main() {
+    val n = try {
+        "abc".toInt()
+    } catch (e: NumberFormatException) {
+        -1                       // catch 块的最后一个表达式是返回值
+    }
+    println(n)
 
-不再被迫 try-catch，但与 Java 库互操作时要主动补 @Throws。
+    // finally 不参与返回值
+    val m = try {
+        "42".toInt()
+    } catch (e: NumberFormatException) {
+        -1
+    } finally {
+        println("finally 总会执行，但它的值被忽略")
+    }
+    println(m)
+}
+```
+
+<Callout type="tip">
+
+`try` 有返回值这一点，让「解析失败给默认值」变成一行：
+
+```kotlin
+fun parseOrDefault(s: String, default: Int = 0): Int =
+    try { s.toInt() } catch (e: NumberFormatException) { default }
+
+fun main() {
+    println(parseOrDefault("42"))
+    println(parseOrDefault("abc", -1))
+}
+```
+
+不过标准库通常已经给了更好的选择——比如这个例子应该直接用 `s.toIntOrNull() ?: default`。
+
+</Callout>
+
+## 3. @Throws：给 Java 侧留信息
+
+Kotlin 代码被 Java 调用时，Java 侧看不到任何异常声明：
+
+```kt
+// Kotlin
+fun readConfig(path: String): String {
+    throw IOException("读取失败")
+}
+```
+
+```java
+// Java 侧：编译器认为这个方法不抛受检异常
+readConfig("a.txt");    // 不能 catch IOException —— 编译报错「never thrown」
+```
+
+加上 `@Throws` 生成 `throws` 声明：
+
+```kt
+@Throws(IOException::class)
+fun readConfig(path: String): String { /* ... */ }
+```
+
+<Callout type="warn" title="混合工程里这是个真问题">
+
+Android 项目大多是 Kotlin/Java 混合的。如果你写的 Kotlin 库函数会抛受检异常
+且**会被 Java 调用**，就必须加 `@Throws`，否则 Java 侧根本没法优雅处理。
+
+同理，实现 Java 接口时如果接口方法声明了 `throws`，你的 Kotlin 实现也该标上。
+
+</Callout>
+
+## 4. Nothing 与 TODO()
+
+```kotlin
+fun fail(message: String): Nothing = throw IllegalStateException(message)
+
+fun parseAge(input: String?): Int {
+    val s = input ?: fail("输入为空")     // 编译器知道右边不会返回
+    return s.toIntOrNull() ?: fail("不是数字：$s")
+}
+
+fun main() {
+    println(parseAge("28"))
+    println(runCatching { parseAge(null) }.exceptionOrNull()?.message)
+    println(runCatching { parseAge("abc") }.exceptionOrNull()?.message)
+}
+```
+
+`Nothing` 是所有类型的子类型，表示「永不正常返回」。这就是 `throw` 能出现在
+Elvis 右边、`when` 分支里的原因。
+
+`TODO()` 是标准库提供的、返回 `Nothing` 的占位函数：
+
+```kt
+fun calculateTax(income: Int): Int = TODO("等产品确认税率规则")
+```
+
+它让未完成的函数**能通过类型检查**（因为 `Nothing` 兼容任何返回类型），
+同时运行到就抛 `NotImplementedError`。比 `return 0` 安全得多——不会有人误以为它能用。
+
+## 5. Result 与 runCatching
+
+对于「可能失败」的操作，比抛异常更好的表达是把失败放进返回类型：
+
+```kotlin
+fun fetchUser(id: Int): Result<String> = runCatching {
+    if (id <= 0) throw IllegalArgumentException("id 必须为正")
+    "User#$id"
+}
+
+fun main() {
+    val ok = fetchUser(1)
+    println(ok.isSuccess)
+    println(ok.getOrNull())
+
+    val bad = fetchUser(-1)
+    println(bad.exceptionOrNull()?.message)
+    println(bad.getOrDefault("默认用户"))
+
+    // 链式处理
+    fetchUser(2)
+        .map { it.uppercase() }
+        .onSuccess { println("成功：$it") }
+        .onFailure { println("失败：${it.message}") }
+
+    // fold：两个分支一起处理
+    val text = fetchUser(-5).fold(
+        onSuccess = { "拿到 $it" },
+        onFailure = { "出错 ${it.message}" },
+    )
+    println(text)
+}
+```
+
+<Callout type="warn" title="runCatching 会吞掉 CancellationException">
+
+在协程里这是个**严重**的坑：
+
+```kt
+// ❌ 协程被取消时，CancellationException 会被 runCatching 捕获，
+//    导致取消信号无法向上传播，结构化并发被破坏
+suspend fun load() = runCatching { api.fetch() }
+```
+
+`CancellationException` 是协程用来传递取消信号的，**必须让它继续往上抛**。
+正确写法是重新抛出：
+
+```kt
+suspend fun load(): Result<Data> = try {
+    Result.success(api.fetch())
+} catch (e: CancellationException) {
+    throw e                     // ← 关键：取消信号原样上抛
+} catch (e: Exception) {
+    Result.failure(e)
+}
+```
+
+详见 [8.8 协程异常处理](/docs/08-coroutines/exception-handling)。
+
+</Callout>
+
+<Callout type="tip" title="业务里更推荐 sealed class 而不是 Result">
+
+`Result` 只能携带 `Throwable`，表达不了「业务失败」的细分类型。Android 上更常见的是：
+
+```kt
+sealed interface LoadResult<out T> {
+    data class Success<T>(val data: T) : LoadResult<T>
+    data class NetworkError(val code: Int) : LoadResult<Nothing>
+    data object Unauthorized : LoadResult<Nothing>
+    data class Unknown(val cause: Throwable) : LoadResult<Nothing>
+}
+```
+
+配合 `when` 的穷尽性检查，每种失败都必须被显式处理。
+
+</Callout>
+
+## 6. use：try-with-resources
+
+```kotlin
+import java.io.StringReader
+
+fun main() {
+    // use 会在结束时自动 close，异常也不影响
+    val content = StringReader("hello\nworld").use { reader ->
+        reader.readText()
+    }
+    println(content)
+}
+```
+
+任何实现了 `Closeable` 的对象都能用。Android 上处理 `Cursor`、`InputStream`、
+`FileOutputStream` 时应该一律用 `use`：
+
+```kt
+contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+    while (cursor.moveToNext()) { /* ... */ }
+}   // cursor 自动关闭，不会泄漏
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question="Kotlin 取消受检异常带来的最大代价是什么？"
+  options={[
+    '性能变差了',
+    '不能再抛异常了',
+    '从函数签名看不出它会抛什么异常，编译器不再提醒你处理',
+    '不能和 Java 互操作',
+  ]}
+  answer={2}
+>
+
+收益是消灭了大量样板和「空 catch 块吞异常」的反模式；代价就是**签名不再携带异常信息**，
+你得靠文档、KDoc 或者约定来知道一个函数会不会失败。
+
+所以 Kotlin 社区的实践是：**「可能失败」应该通过返回类型表达**——
+用 `Result`、可空返回值（`toIntOrNull`）或者 sealed class，
+而不是靠调用方记得去 catch。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      Kotlin 函数会抛 IOException 且会被 Java 调用，为什么必须加 <code>@Throws</code>？
+    </>
+  }
+  options={[
+    '不加会编译报错',
+    '不加的话字节码里没有 throws 声明，Java 侧无法 catch 该受检异常（会报 never thrown）',
+    '@Throws 能提升性能',
+    '因为 Kotlin 需要它来抛异常',
+  ]}
+  answer={1}
+>
+
+Kotlin 编译时不生成 `throws` 声明。Java 编译器看到一个「声明上不抛受检异常」的方法，
+就会拒绝你为它写 `catch (IOException e)`——报错 `exception is never thrown in
+the corresponding try block`。
+
+`@Throws(IOException::class)` 让编译器把 `throws` 写进字节码，Java 侧就能正常处理了。
+
+Android 混合工程里这是实打实会遇到的问题。同理，实现带 `throws` 的 Java 接口时，
+Kotlin 实现也该标注。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="在协程的挂起函数里用 runCatching 包住整个逻辑，有什么隐患？"
+  options={[
+    '没有隐患，这是推荐写法',
+    '它会捕获 CancellationException，导致协程取消信号无法传播，破坏结构化并发',
+    'runCatching 不能用于 suspend 函数',
+    '会导致内存泄漏',
+  ]}
+  answer={1}
+>
+
+`runCatching` 捕获的是 `Throwable`，包括 `CancellationException`。
+
+而 `CancellationException` 是协程**用来传递取消信号**的特殊异常——它必须一路向上抛，
+父协程才知道子协程已经响应了取消。被吞掉之后，协程会表现为「取消了但还在跑」，
+结构化并发的保证就失效了。
+
+正确写法是显式重抛：
+
+```
+try { ... } catch (e: CancellationException) { throw e } catch (e: Exception) { ... }
+```
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question={
+    <>
+      关于 <code>Nothing</code> 和 <code>TODO()</code>，哪些说法正确？
+    </>
+  }
+  options={[
+    'Nothing 是所有类型的子类型',
+    '返回 Nothing 的函数可以出现在 Elvis 运算符右边',
+    'TODO() 能让未实现的函数通过类型检查，运行到时抛 NotImplementedError',
+    'Nothing 有一个唯一实例，类似 Unit',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+A、B、C 都对，而且它们是同一件事的三个侧面：因为 `Nothing` 是所有类型的子类型，
+所以它能出现在任何期望某个类型的位置；因为它表示「永不正常返回」，
+编译器知道那条路径不会产出值。
+
+**D 错**：`Nothing` **没有任何实例**——这正是它的定义。`Unit` 恰好相反，
+它有且只有一个实例。一个表示「没有值」，一个表示「值不重要」。
+
+</Quiz>
 
 ## 官方参考
 

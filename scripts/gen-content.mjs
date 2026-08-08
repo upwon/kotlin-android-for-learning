@@ -218,6 +218,7 @@ const parts = [
         ],
         javaNote: 'switch 升级成 when：可匹配类型、区间、任意布尔条件，且有返回值。',
         official: 'control-flow',
+        deep: true,
       },
       {
         num: '3.2',
@@ -232,6 +233,7 @@ const parts = [
         ],
         javaNote: 'lambda 里直接 return 会返回外层函数，这是 Java 匿名类没有的行为。',
         official: 'returns',
+        deep: true,
       },
       {
         num: '3.3',
@@ -247,6 +249,7 @@ const parts = [
         ],
         javaNote: '不再被迫 try-catch，但与 Java 库互操作时要主动补 @Throws。',
         official: 'exceptions',
+        deep: true,
       },
     ],
   },
