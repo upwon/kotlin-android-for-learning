@@ -1,20 +1,345 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 5.3 内联函数 inline」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+`inline` 解释了三件之前留下的悬念：为什么标准库那么多高阶函数却「没有开销」、
+为什么 lambda 里能写非局部 `return`、为什么 `reified` 能拿回类型信息。
+但它也是**最容易被滥用**的关键字——Android 上滥用会直接体现为包体积增长。
+
+## 1. 问题：lambda 是有成本的
+
+```kt
+// 非内联的高阶函数
+fun repeatAction(times: Int, action: (Int) -> Unit) {
+    for (i in 0 until times) action(i)
+}
+
+repeatAction(3) { println(it) }
+```
+
+编译后，那个 lambda 会变成一个 `Function1` 对象——**每次调用都可能新建一个对象**
+（如果 lambda 捕获了变量，就一定新建）。在循环里高频调用时，这是实打实的 GC 压力。
+
+## 2. inline 做了什么
+
+```kotlin
+inline fun repeatAction(times: Int, action: (Int) -> Unit) {
+    for (i in 0 until times) action(i)
+}
+
+fun main() {
+    repeatAction(3) { println("第 $it 次") }
+}
+```
+
+编译器把函数体和 lambda **直接展开到调用处**，大致变成：
+
+```kt
+// 展开后（示意）
+for (i in 0 until 3) {
+    println("第 $i 次")
+}
+```
+
+<Callout type="success">
+
+**没有函数调用，没有 lambda 对象，没有额外分配。**
+
+这就是为什么 `forEach`、`map`、`filter`、`let`、`apply` 这些标准库函数
+用起来「和手写循环一样快」——它们全都是 `inline` 的。
+
 </Callout>
 
-## 学习提纲
+## 3. 三个附带能力
 
-- inline 做了什么、什么时候值得
-- noinline 与 crossinline
-- 非局部返回的由来
-- reified 类型参数
-- 滥用 inline 导致的包体积膨胀
+### 非局部返回
 
-## 与 Java / Android 的关键差异
+```kotlin
+inline fun <T> List<T>.findFirst(predicate: (T) -> Boolean): T? {
+    forEach { if (predicate(it)) return it }
+    return null
+}
 
-这是 Kotlin 标准库大量高阶函数「零开销」的原因，也是 Android 上包体积需要留意的点。
+fun process(items: List<Int>): String {
+    items.forEach {
+        if (it < 0) return "发现负数，中止"    // ← 只有 inline 才允许
+    }
+    return "全部正常"
+}
+
+fun main() {
+    println(process(listOf(1, 2, 3)))
+    println(process(listOf(1, -2, 3)))
+}
+```
+
+因为 lambda 体成了外层函数体的一部分，`return` 自然返回外层函数。
+**非 inline 的高阶函数里写裸 `return` 会编译报错。**
+
+### reified
+
+```kotlin
+inline fun <reified T> Any.asOrNull(): T? = this as? T
+
+fun main() {
+    val x: Any = "hello"
+    println(x.asOrNull<String>())
+    println(x.asOrNull<Int>())
+}
+```
+
+详见 [4.9 泛型](/docs/04-classes/generics)。
+
+### 内联属性访问器
+
+```kotlin
+class Config(private val map: Map<String, String>) {
+    inline val isEmpty: Boolean get() = map.isEmpty()
+}
+
+fun main() = println(Config(emptyMap()).isEmpty)
+```
+
+## 4. noinline 与 crossinline
+
+```kotlin
+// noinline：这个 lambda 不内联（因为要把它当对象存起来/传递）
+inline fun setup(
+    immediate: () -> Unit,
+    noinline callback: () -> Unit,
+): () -> Unit {
+    immediate()
+    return callback        // 要返回它，就必须是真实对象 → noinline
+}
+
+// crossinline：允许在别的执行上下文里调用，但禁止非局部返回
+inline fun runLater(crossinline action: () -> Unit) {
+    val runnable = Runnable { action() }    // 在 lambda 里调用 → 需要 crossinline
+    runnable.run()
+}
+
+fun main() {
+    val cb = setup({ println("立即执行") }, { println("回调") })
+    cb()
+
+    runLater { println("稍后执行") }
+}
+```
+
+| 修饰符 | 含义 | 什么时候需要 |
+| --- | --- | --- |
+| （默认） | 内联，允许非局部返回 | 大多数情况 |
+| `noinline` | 不内联，是真实对象 | 需要存储、返回、或传给非 inline 函数 |
+| `crossinline` | 内联但禁止非局部返回 | lambda 会在另一个执行上下文中被调用 |
+
+<Callout type="tip">
+
+记忆方式：
+
+- `noinline` = 「我需要这个 lambda 是个**对象**」
+- `crossinline` = 「这个 lambda 会在**别的地方/别的时刻**被调用，
+  所以不能让它 return 我的函数」
+
+Android 上 `crossinline` 最常见于把 lambda 包进 `Runnable`、
+`View.post {}` 或者回调接口的场景。
+
+</Callout>
+
+## 5. 什么时候该用 inline
+
+<Callout type="warn" title="inline 不是「加了就更快」">
+
+**只有当函数参数里有函数类型时，`inline` 才有意义。**
+
+```kt
+// ❌ 没有 lambda 参数，inline 没有收益，只是让代码膨胀
+inline fun add(a: Int, b: Int) = a + b
+
+// ✅ 有 lambda 参数，避免了对象分配
+inline fun <T> T.applyIf(condition: Boolean, block: T.() -> Unit): T {
+    if (condition) block()
+    return this
+}
+```
+
+对没有 lambda 参数的函数加 `inline`，编译器会给警告
+`Expected performance impact from inlining is insignificant`。
+
+</Callout>
+
+<Callout type="warn" title="Android 上的代价：包体积">
+
+内联意味着**函数体在每个调用点被复制一份**。一个 100 行的 inline 函数被调用 50 次，
+字节码里就有 50 份。
+
+具体影响：
+
+- **APK / dex 体积增长**
+- **方法数**反而可能减少（少了 lambda 类），但代码段变大
+- **编译变慢**
+
+所以：
+
+| 情况 | 建议 |
+| --- | --- |
+| 短小 + 有 lambda 参数 | ✅ inline |
+| 函数体很长 | ❌ 别 inline，或者把大块逻辑抽到普通函数里 |
+| 没有 lambda 参数 | ❌ 别 inline |
+| 公开 API 且函数体会变 | ⚠️ 谨慎——inline 的函数体是二进制兼容性的一部分 |
+
+</Callout>
+
+## 6. inline 与 private 成员
+
+```kt
+class Repo {
+    private val secret = "内部数据"
+
+    // ❌ public inline 函数不能访问 private 成员
+    //    因为展开后的代码在别的类里，访问不到 private
+    inline fun leak() = secret          // 编译错误
+
+    // ✅ 改成 internal/private，或者别 inline
+    fun ok() = secret
+}
+```
+
+这是 inline 的一个硬限制：**public inline 函数只能访问 public 成员**。
+道理很直接——函数体被复制到调用方的类里了，那里没有权限访问私有成员。
+
+## 7. 实测对比
+
+```kotlin
+inline fun measureInline(block: () -> Unit): Long {
+    val start = System.nanoTime()
+    block()
+    return System.nanoTime() - start
+}
+
+fun measureNoInline(block: () -> Unit): Long {
+    val start = System.nanoTime()
+    block()
+    return System.nanoTime() - start
+}
+
+fun main() {
+    var sum = 0
+    val a = measureInline { repeat(1_000_000) { sum += it } }
+    val b = measureNoInline { repeat(1_000_000) { sum += it } }
+    println("inline: ${a / 1_000_000}ms, non-inline: ${b / 1_000_000}ms")
+    println("（单次调用差别很小，差距体现在高频调用时的对象分配上）")
+}
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question="给一个没有函数类型参数的普通函数加 inline，会怎样？"
+  options={[
+    '性能显著提升',
+    '编译器警告「内联带来的性能收益微不足道」，且会增加字节码体积',
+    '编译错误',
+    '没有任何影响',
+  ]}
+  answer={1}
+>
+
+`inline` 的核心收益是**消除 lambda 对象的分配**和**函数调用开销**。
+没有 lambda 参数时，只剩下微不足道的调用开销，而代价（每个调用点复制一份函数体）
+一分不少。
+
+编译器会给警告 `Expected performance impact from inlining is insignificant`。
+
+JIT 本来就会内联热点小函数，手动加 `inline` 在这种情况下是帮倒忙。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      什么时候需要给 lambda 参数加 <code>crossinline</code>？
+    </>
+  }
+  options={[
+    '想让它不被内联时',
+    '当这个 lambda 会在另一个执行上下文里被调用（比如包进 Runnable）时，需要禁止它做非局部返回',
+    '当 lambda 有多个参数时',
+    '当函数是 public 时',
+  ]}
+  answer={1}
+>
+
+`crossinline` = **仍然内联，但禁止非局部返回**。
+
+需要它的场景是：lambda 不是在当前函数体里直接调用，而是被塞进另一个执行上下文：
+
+```
+inline fun runLater(crossinline action: () -> Unit) {
+    val runnable = Runnable { action() }    // 在另一个 lambda 里调用
+    handler.post(runnable)
+}
+```
+
+如果允许非局部返回，`action` 里的 `return` 会试图返回 `runLater`——
+但那时 `runLater` 早就执行完了，语义上不可能实现。所以编译器要求标 `crossinline`。
+
+对比 `noinline`：那是「我需要这个 lambda 是个真实对象」（要存起来、返回、
+或传给非 inline 函数）。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="Android 上滥用 inline 的主要代价是什么？"
+  options={[
+    '运行时变慢',
+    '函数体在每个调用点被复制，导致 dex/APK 体积增长和编译变慢',
+    '会导致内存泄漏',
+    '无法混淆',
+  ]}
+  answer={1}
+>
+
+内联的本质是**代码复制**。一个 100 行的 inline 函数被调用 50 次，
+字节码里就有 50 份副本。
+
+具体影响：APK 体积增长、编译变慢。（方法数反而可能减少，因为少了 lambda 类，
+但代码段整体是变大的。）
+
+实践原则：
+
+- **短小 + 有 lambda 参数** → inline
+- **函数体长** → 不 inline，或者把大块逻辑抽到一个普通函数里，
+  inline 函数只保留那层 lambda 调用
+
+标准库的 `let`、`apply`、`forEach` 都只有几行，这不是巧合。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      为什么 <code>public inline</code> 函数不能访问类的 <code>private</code> 成员？
+    </>
+  }
+  options={[
+    '这是一个语言 bug',
+    '因为函数体会被复制到调用方的代码里，那里没有权限访问 private 成员',
+    '因为 inline 函数是静态的',
+    '其实可以访问',
+  ]}
+  answer={1}
+>
+
+内联把函数体**复制到调用处**——而调用处可能在另一个类、另一个模块里。
+那段代码在 JVM 层面没有权限访问原类的 `private` 字段，会直接 `IllegalAccessError`。
+
+所以编译器在编译期就拒绝了这种写法。
+
+解法：把函数改成 `internal`/`private`（可见范围受限，调用方也在同一边界内），
+或者干脆不 inline，或者把 private 成员改成 `@PublishedApi internal`
+（标准库常用这招，但要清楚这等于把它变成了事实上的公开 API）。
+
+</Quiz>
 
 ## 官方参考
 

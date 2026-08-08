@@ -1,19 +1,363 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 6.3 this 表达式」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Java 里 `this` 的歧义只有一种（内部类里的 `Outer.this`）。
+Kotlin 因为有**扩展函数**和**带接收者的 lambda**，隐式 `this` 的来源变多了——
+这一课把它们理清楚。
+
+## 1. 限定 this
+
+```kotlin
+class Outer(val name: String) {
+    inner class Inner(val name: String) {
+        fun describe(): String {
+            // this 指向 Inner
+            // this@Outer 指向外层实例
+            return "内层：${this.name}，外层：${this@Outer.name}"
+        }
+    }
+}
+
+fun main() {
+    println(Outer("外").Inner("内").describe())
+}
+```
+
+Java 写 `Outer.this`，Kotlin 写 `this@Outer`。语法不同，含义一样。
+
+## 2. 扩展函数里的 this
+
+```kotlin
+class Repo(val name: String)
+
+fun Repo.describe(): String = "仓库 $name"        // this 就是接收者，可省略
+fun Repo.describeExplicit(): String = "仓库 ${this.name}"
+
+fun main() {
+    println(Repo("core").describe())
+    println(Repo("core").describeExplicit())
+}
+```
+
+在类内部定义扩展函数时，会同时有**两个接收者**：
+
+```kotlin
+class Formatter(val prefix: String) {
+
+    // 这个扩展函数有两个接收者：
+    //   分发接收者 dispatch receiver = Formatter（this@Formatter）
+    //   扩展接收者 extension receiver = String（this）
+    fun String.decorate(): String = "$prefix$this$prefix"
+
+    fun run(input: String) = input.decorate()
+}
+
+fun main() {
+    println(Formatter("**").run("标题"))
+}
+```
+
+规则：**不加限定的 `this` 指向最内层的接收者**（这里是 `String`）。
+要访问外层的用 `this@Formatter`。
+
+## 3. 作用域函数里的 this
+
+```kotlin
+class Config {
+    var host = ""
+    var port = 0
+    override fun toString() = "$host:$port"
+}
+
+fun main() {
+    // apply / run / with：接收者是 this（可省略）
+    val c = Config().apply {
+        host = "api.example.com"     // 等价于 this.host = ...
+        port = 443
+    }
+    println(c)
+
+    // let / also：接收者是参数 it
+    Config().also {
+        it.host = "test.com"          // 必须写 it
+        it.port = 80
+    }.let { println(it) }
+}
+```
+
+| 函数 | 接收者形式 | 返回值 |
+| --- | --- | --- |
+| `apply` | `this` | 接收者本身 |
+| `also` | `it` | 接收者本身 |
+| `run` | `this` | lambda 结果 |
+| `let` | `it` | lambda 结果 |
+| `with` | `this` | lambda 结果 |
+
+完整的选择依据见 [7.6 作用域函数](/docs/07-collections/scope-functions)。
+
+## 4. 嵌套时的歧义
+
+```kotlin
+class Activity2(val name: String) {
+    fun setup() {
+        val list = listOf("a", "b")
+
+        list.forEach { item ->
+            // this 仍然是 Activity2 —— 普通 lambda 不改变 this
+            println("$name 处理 $item")
+        }
+
+        StringBuilder().apply {
+            // 这里 this 变成了 StringBuilder！
+            append(this@Activity2.name)     // 要访问 Activity2 得限定
+            append("-suffix")
+            println(this.toString())
+        }
+    }
+}
+
+fun main() = Activity2("MainActivity").setup()
+```
+
+<Callout type="warn" title="apply/run 会「遮蔽」外层的 this">
+
+普通 lambda（`forEach`、`map`）**不改变 `this`**，只是引入一个参数。
+
+带接收者的 lambda（`apply`、`run`、`with`）会把 `this` 换成新的接收者。
+嵌套两层 `apply` 时，内层完全遮蔽了外层：
+
+```kt
+outer.apply {
+    inner.apply {
+        // this 是 inner，外层要写 this@outer... 但 apply 的标签是 @apply
+        // 两层 apply 嵌套时根本没法区分！
+    }
+}
+```
+
+**规则：不要嵌套两层带接收者的作用域函数。** 需要嵌套时，
+至少有一层换成 `also`/`let`（用 `it` 并起个名字）：
+
+```kt
+outer.apply {
+    inner.also { i ->
+        i.field = this.field     // 清楚：this 是 outer，i 是 inner
+    }
+}
+```
+
 </Callout>
 
-## 学习提纲
+## 5. 隐式 this 与 DSL
 
-- 隐式接收者与作用域
-- 限定 this@Outer / this@label
-- 扩展函数中的 this
-- 嵌套 lambda 中 this 的歧义
+`@DslMarker` 就是为了解决上面那个遮蔽问题：
 
-## 与 Java / Android 的关键差异
+```kotlin
+@DslMarker
+annotation class HtmlDsl
 
-Outer.this 变成 this@Outer；带接收者的 lambda 会引入新的隐式 this。
+@HtmlDsl
+class Table {
+    private val rows = mutableListOf<String>()
+    fun row(block: Row.() -> Unit) {
+        rows += Row().apply(block).render()
+    }
+    fun render() = "<table>${rows.joinToString("")}</table>"
+}
+
+@HtmlDsl
+class Row {
+    private val cells = mutableListOf<String>()
+    fun cell(text: String) { cells += "<td>$text</td>" }
+    fun render() = "<tr>${cells.joinToString("")}</tr>"
+}
+
+fun table(block: Table.() -> Unit) = Table().apply(block).render()
+
+fun main() {
+    println(table {
+        row {
+            cell("A1")
+            cell("A2")
+            // row { }    // ❌ @DslMarker 禁止了跳级访问外层接收者
+        }
+        row { cell("B1") }
+    })
+}
+```
+
+<Callout type="tip">
+
+`@DslMarker` 的作用：**同一个标记下的多个接收者，内层会屏蔽外层的隐式访问**。
+
+没有它的话，在 `row { }` 里能直接调用 `row(...)`（外层 Table 的方法），
+产生嵌套的 `<tr>` 这种非法结构。加了之后编译器直接拒绝。
+
+Compose、Gradle KTS 都用了这个机制。详见
+[9.4 类型安全构建器](/docs/09-advanced/type-safe-builders)。
+
+</Callout>
+
+## 6. Android 场景
+
+```kt
+class MyFragment : Fragment() {
+
+    private fun setup() {
+        // 匿名对象里的 this 是匿名对象自己
+        binding.recyclerView.addOnScrollListener(
+            object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                    // this 是这个匿名对象，要访问 Fragment 得限定
+                    this@MyFragment.onScroll(dy)
+                }
+            }
+        )
+
+        // 带接收者的 lambda
+        AlertDialog.Builder(requireContext()).apply {
+            setTitle("提示")
+            setMessage("确定要删除吗？")
+            setPositiveButton("确定") { _, _ ->
+                // 这里 this 还是 Builder
+                this@MyFragment.delete()
+            }
+        }.show()
+    }
+
+    private fun onScroll(dy: Int) {}
+    private fun delete() {}
+}
+```
+
+<Callout type="warn" title="Kotlin 的 lambda 不像 Java 匿名类那样改变 this">
+
+Java 里给 `setOnClickListener` 传匿名类，`this` 会变成那个匿名类实例——
+所以要写 `MyActivity.this`。
+
+Kotlin 的 lambda **不改变 `this`**：
+
+```kt
+button.setOnClickListener {
+    // this 仍然是 Fragment/Activity，可以直接调用它的方法
+    updateUi()
+}
+```
+
+只有 `object : Type { }`（对象表达式）和带接收者的 lambda 才会改变 `this`。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      Java 的 <code>Outer.this</code> 在 Kotlin 里怎么写？
+    </>
+  }
+  options={['Outer.this', 'this@Outer', 'this.Outer', 'super@Outer']}
+  answer={1}
+>
+
+`this@Outer`。Kotlin 统一用 `this@标签` 的形式做限定，标签可以是：
+
+- **类名**：`this@Outer`、`this@MyFragment`
+- **函数名**（在带接收者的 lambda 里）：`this@apply`、`this@run`
+- **自定义标签**
+
+语法不同但含义和 Java 一致：指定要哪一层的 `this`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      在 <code>button.setOnClickListener {'{'} ... {'}'}</code> 的 lambda 里，<code>this</code> 是什么？
+    </>
+  }
+  options={[
+    '匿名的 OnClickListener 对象',
+    '外层的 Activity/Fragment，lambda 不改变 this',
+    'button',
+    'null',
+  ]}
+  answer={1}
+>
+
+**外层的 Activity/Fragment**——普通 lambda **不改变 `this`**，
+它只是一段闭包代码。
+
+这和 Java 不同：Java 里传匿名内部类，`this` 会变成那个匿名类实例，
+所以必须写 `MyActivity.this.updateUi()`。Kotlin 里直接 `updateUi()` 就行。
+
+会改变 `this` 的只有两种情况：
+
+1. **对象表达式** `object : Type { }` —— 那是真正的匿名类
+2. **带接收者的 lambda** `T.() -> Unit` —— 比如 `apply`、`run`、`with`
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="为什么不建议嵌套两层 apply？"
+  options={[
+    '性能问题',
+    '内层的 this 完全遮蔽外层，且两层 apply 的标签相同，无法用 this@apply 区分',
+    '编译器不允许',
+    '会导致内存泄漏',
+  ]}
+  answer={1}
+>
+
+`apply` 是带接收者的 lambda，会把 `this` 换成新接收者。嵌套两层时，
+内层的 `this` 遮蔽了外层——而且两层的标签**都是 `@apply`**，
+`this@apply` 只能指向最近的那一层，外层根本无法访问。
+
+结果是代码里出现「这个属性到底属于哪个对象」的歧义，读的人只能靠猜。
+
+解法：嵌套时至少让一层用 `also` 或 `let`，把接收者变成有名字的参数：
+
+```
+outer.apply {
+    inner.also { i ->
+        i.field = this.field     // this 是 outer，i 是 inner，一目了然
+    }
+}
+```
+
+DSL 设计里对应的解法是 `@DslMarker`——它在编译期禁止跳级访问外层接收者。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      在类内部定义扩展函数 <code>fun String.decorate()</code>，函数体里不加限定的 <code>this</code> 指向谁？
+    </>
+  }
+  options={[
+    '外层的类实例',
+    'String（最内层的接收者，即扩展接收者）',
+    '编译错误，有歧义',
+    '取决于调用方式',
+  ]}
+  answer={1}
+>
+
+指向 **String**——不加限定的 `this` 总是指向**最内层的接收者**。
+
+这种情况下同时存在两个接收者，各有名字：
+
+- **扩展接收者** extension receiver = `String`，即 `this`
+- **分发接收者** dispatch receiver = 外层类，即 `this@Formatter`
+
+这个「双接收者」能力其实很有用：可以写出只在某个类的上下文里才可用的扩展，
+比如只有在 `Formatter` 内部才能对 String 调用 `decorate()`。
+
+Compose 的 `Modifier` 扩展、Gradle KTS 的很多 API 都用了这个模式。
+
+</Quiz>
 
 ## 官方参考
 

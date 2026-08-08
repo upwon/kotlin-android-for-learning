@@ -471,6 +471,7 @@ const parts = [
         outline: ['infix 中缀函数', 'tailrec 尾递归优化', 'vararg 与展开', '函数引用 `::foo` 与绑定引用'],
         javaNote: '方法引用比 Java 更强：可以引用顶层函数、构造函数与属性。',
         official: 'functions',
+        deep: true,
       },
       {
         num: '5.2',
@@ -486,6 +487,7 @@ const parts = [
         ],
         javaNote: 'Java lambda 只能捕获 effectively final 变量，Kotlin 没有这个限制。',
         official: 'lambdas',
+        deep: true,
       },
       {
         num: '5.3',
@@ -501,6 +503,7 @@ const parts = [
         ],
         javaNote: '这是 Kotlin 标准库大量高阶函数「零开销」的原因，也是 Android 上包体积需要留意的点。',
         official: 'inline-functions',
+        deep: true,
       },
       {
         num: '5.4',
@@ -515,6 +518,7 @@ const parts = [
         ],
         javaNote: 'Java 没有操作符重载；Kotlin 通过固定命名约定实现，克制使用。',
         official: 'operator-overloading',
+        deep: true,
       },
     ],
   },
@@ -537,6 +541,7 @@ const parts = [
         javaNote: 'Android SDK 大量返回平台类型，注解不全时空安全会「漏气」。',
         official: 'null-safety',
         star: true,
+        deep: true,
       },
       {
         num: '6.2',
@@ -551,6 +556,7 @@ const parts = [
         ],
         javaNote: '和 Java 相反：== 是 equals，=== 才是引用比较。',
         official: 'equality',
+        deep: true,
       },
       {
         num: '6.3',
@@ -560,6 +566,7 @@ const parts = [
         outline: ['隐式接收者与作用域', '限定 this@Outer / this@label', '扩展函数中的 this', '嵌套 lambda 中 this 的歧义'],
         javaNote: 'Outer.this 变成 this@Outer；带接收者的 lambda 会引入新的隐式 this。',
         official: 'this-expressions',
+        deep: true,
       },
     ],
   },

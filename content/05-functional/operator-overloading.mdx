@@ -1,19 +1,330 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 5.4 操作符重载」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Java 没有操作符重载。Kotlin 有，但它走的是**约定** convention 路线：
+不是让你自定义符号，而是**把固定的符号映射到固定的函数名**。
+这限制了滥用空间——你没法发明 `<=>` 这种运算符。
+
+## 1. 约定的本质
+
+```kotlin
+data class Vec(val x: Int, val y: Int) {
+    operator fun plus(other: Vec) = Vec(x + other.x, y + other.y)
+    operator fun minus(other: Vec) = Vec(x - other.x, y - other.y)
+    operator fun times(scale: Int) = Vec(x * scale, y * scale)
+    operator fun unaryMinus() = Vec(-x, -y)
+}
+
+fun main() {
+    val a = Vec(1, 2)
+    val b = Vec(3, 4)
+
+    println(a + b)      // 编译成 a.plus(b)
+    println(b - a)
+    println(a * 3)
+    println(-a)
+}
+```
+
+关键字是 `operator`——**不加它，编译器不会把函数和符号关联起来**。
+
+## 2. 常用约定表
+
+| 表达式 | 函数名 |
+| --- | --- |
+| `a + b` | `a.plus(b)` |
+| `a - b` | `a.minus(b)` |
+| `a * b` | `a.times(b)` |
+| `a / b` | `a.div(b)` |
+| `a % b` | `a.rem(b)` |
+| `-a` | `a.unaryMinus()` |
+| `!a` | `a.not()` |
+| `a++` | `a.inc()` |
+| `a[i]` | `a.get(i)` |
+| `a[i] = v` | `a.set(i, v)` |
+| `a(x)` | `a.invoke(x)` |
+| `a in b` | `b.contains(a)` |
+| `a..b` | `a.rangeTo(b)` |
+| `a > b` | `a.compareTo(b) > 0` |
+| `a == b` | `a?.equals(b) ?: (b === null)` |
+| `a += b` | `a.plusAssign(b)` 或 `a = a.plus(b)` |
+| `for (x in a)` | `a.iterator()` |
+| `val (x, y) = a` | `a.component1()`, `a.component2()` |
+| `val x by a` | `a.getValue(...)` |
+
+## 3. get / set：索引访问
+
+```kotlin
+class Grid(private val width: Int, private val height: Int) {
+    private val cells = IntArray(width * height)
+
+    operator fun get(x: Int, y: Int): Int = cells[y * width + x]
+
+    operator fun set(x: Int, y: Int, value: Int) {
+        cells[y * width + x] = value
+    }
+}
+
+fun main() {
+    val g = Grid(3, 3)
+    g[1, 1] = 5              // set
+    g[2, 0] = 9
+    println(g[1, 1])         // get
+    println(g[0, 0])
+}
+```
+
+注意 `get`/`set` 可以有**任意多个参数**，这是 Java 数组语法做不到的。
+
+## 4. invoke：让对象像函数一样被调用
+
+```kotlin
+class Multiplier(private val factor: Int) {
+    operator fun invoke(x: Int) = x * factor
+}
+
+fun main() {
+    val triple = Multiplier(3)
+    println(triple(5))       // 等价于 triple.invoke(5)
+}
+```
+
+Android 上最常见的用法是 **UseCase**：
+
+```kt
+class GetUserUseCase(private val repo: UserRepository) {
+    suspend operator fun invoke(id: String): User = repo.getUser(id)
+}
+
+// 调用点读起来像函数
+class MyViewModel(private val getUser: GetUserUseCase) : ViewModel() {
+    fun load(id: String) = viewModelScope.launch {
+        val user = getUser(id)     // 而不是 getUser.execute(id)
+    }
+}
+```
+
+## 5. compareTo：让对象可排序
+
+```kotlin
+data class Version(val major: Int, val minor: Int) : Comparable<Version> {
+    override fun compareTo(other: Version): Int =
+        compareValuesBy(this, other, Version::major, Version::minor)
+}
+
+fun main() {
+    val a = Version(1, 2)
+    val b = Version(1, 10)
+
+    println(a < b)
+    println(maxOf(a, b))
+    println(listOf(Version(2, 0), a, b).sorted())
+}
+```
+
+实现 `Comparable` 的 `compareTo` 时**不需要写 `operator`**（接口里已经标了）。
+
+`compareValuesBy` 是标准库的助手，按顺序比较多个字段，比手写一串 if 清楚。
+
+## 6. contains 与 rangeTo
+
+```kotlin
+data class DateRange(val start: Int, val end: Int) {
+    operator fun contains(day: Int) = day in start..end
+}
+
+class Day(val value: Int) {
+    operator fun rangeTo(other: Day) = DateRange(value, other.value)
+}
+
+fun main() {
+    val range = Day(1)..Day(10)
+    println(5 in range)
+    println(20 in range)
+}
+```
+
+## 7. 复合赋值的两条路径
+
+```kotlin
+fun main() {
+    // 不可变类型：a += b 变成 a = a.plus(b)，需要 a 是 var
+    var v = 1
+    v += 2
+    println(v)
+
+    // 可变集合：用 plusAssign，原地修改
+    val list = mutableListOf(1, 2)
+    list += 3                    // MutableList.plusAssign
+    println(list)
+
+    // 只读集合：用 plus，生成新集合
+    val readOnly = listOf(1, 2)
+    val newList = readOnly + 3   // List.plus
+    println(newList)
+}
+```
+
+<Callout type="warn" title="同时定义 plus 和 plusAssign 会编译报错">
+
+如果一个类型既有 `plus` 又有 `plusAssign`，编译器面对 `a += b` 无法决定用哪个，
+会报 `Assignment operators ambiguity`。
+
+**只实现其中一个**：不可变类型实现 `plus`，可变类型实现 `plusAssign`。
+
 </Callout>
 
-## 学习提纲
+## 8. 什么时候不该重载
 
-- 常用约定：plus / get / set / invoke / compareTo
-- 解构约定 componentN
-- 委托约定 getValue / setValue
-- 什么时候不该重载
+<Callout type="warn" title="克制的三条标准">
 
-## 与 Java / Android 的关键差异
+1. **符号的含义必须符合直觉。** `+` 应该表示「合并/相加」，
+   不要用它表示「发送消息」。
+2. **不要为了炫技。** `user + role` 不如 `user.addRole(role)` 清楚。
+3. **不要重载 `==` 的语义。** `equals` 应该表示结构相等，
+   把它改成「ID 相同」会让所有集合操作行为异常
+   （`contains`、`distinct`、`Set` 全都依赖它）。
 
-Java 没有操作符重载；Kotlin 通过固定命名约定实现，克制使用。
+**适合重载的领域**：数学/几何类型（`Vec`、`Matrix`）、
+带单位的量（`Money`、`Duration`、`Dp`）、集合类、DSL 构建器。
+
+**不适合的**：业务实体（`User`、`Order`）、服务类。
+
+</Callout>
+
+标准库里的正面例子：
+
+```kotlin
+import kotlin.time.Duration.Companion.seconds
+
+fun main() {
+    // Duration 重载了算术运算符
+    val total = 30.seconds + 45.seconds
+    println(total)
+    println(total * 2)
+
+    // 集合重载了 plus / minus
+    println(listOf(1, 2) + listOf(3))
+    println(setOf(1, 2, 3) - setOf(2))
+
+    // String 重载了 plus 和 get
+    println("abc"[1])
+    println("ab" + "cd")
+}
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      定义了 <code>fun plus(other: Vec): Vec</code> 但忘了写 <code>operator</code>，会怎样？
+    </>
+  }
+  options={[
+    '仍然可以用 a + b',
+    'a + b 编译报错，只能写 a.plus(b)',
+    '编译器自动补上 operator',
+    '运行时报错',
+  ]}
+  answer={1}
+>
+
+`operator` 关键字是把函数和符号关联起来的**显式开关**。不写它，`plus` 就只是一个
+普通方法，`a + b` 会报错说找不到对应的操作符实现。
+
+这个设计是有意的：避免任何叫 `plus` 的方法被意外地当成 `+`。
+IDE 遇到这种情况会提示 `Modifier 'operator' is required`，一键就能补上。
+
+例外是接口里已经标了 `operator` 的情况（比如 `Comparable.compareTo`），
+实现时不用重复写。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      一个类同时定义了 <code>plus</code> 和 <code>plusAssign</code>，写 <code>a += b</code> 会怎样？
+    </>
+  }
+  options={[
+    '优先用 plusAssign',
+    '优先用 plus',
+    '编译报错，赋值操作符有歧义',
+    '随机选一个',
+  ]}
+  answer={2}
+>
+
+**编译报错** `Assignment operators ambiguity`——编译器无法决定 `a += b`
+应该翻译成 `a = a.plus(b)` 还是 `a.plusAssign(b)`。
+
+设计约定很清楚：
+
+- **不可变类型**实现 `plus`（返回新对象，要求 `a` 是 `var`）
+- **可变类型**实现 `plusAssign`（原地修改，`a` 可以是 `val`）
+
+标准库就是这么分的：`List.plus` 返回新集合，`MutableList.plusAssign` 原地添加。
+这也解释了为什么 `val list = mutableListOf(1); list += 2` 是合法的。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      Android 的 UseCase 常写成 <code>suspend operator fun invoke(...)</code>，好处是什么？
+    </>
+  }
+  options={[
+    '性能更好',
+    '调用点可以写 getUser(id) 而不是 getUser.execute(id)，读起来像函数调用',
+    'invoke 是必须的',
+    '可以省略 suspend',
+  ]}
+  answer={1}
+>
+
+纯粹是**调用点的可读性**。`invoke` 约定让对象可以像函数一样被调用：
+
+```
+class GetUserUseCase(private val repo: UserRepository) {
+    suspend operator fun invoke(id: String) = repo.getUser(id)
+}
+
+val user = getUser(id)        // 而不是 getUser.execute(id)
+```
+
+UseCase 在概念上就是「一个可执行的动作」，用函数调用语法表达比 `.execute()`
+更贴近它的语义。这是 Clean Architecture 的 Android 实现里的通行写法。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些是操作符重载的合理用法？"
+  options={[
+    'Vec 类型重载 + 表示向量相加',
+    'Money 类型重载 + 表示金额相加',
+    'User 类型重载 + 表示给用户添加角色',
+    'UseCase 类重载 invoke 让它可以像函数一样调用',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+A、B 是数学/带单位量的典型场景——`+` 在这里的含义完全符合直觉。
+D 是 Android 上的通行实践。
+
+**C 不合理**：`user + role` 表达不了「添加角色」这个意图，读的人只会困惑。
+`user.addRole(role)` 才是对的。
+
+判断标准：**这个符号在这个类型上的含义，是不是不解释也能懂？**
+
+还有一条硬规则：**不要重载 `==`（`equals`）的语义**。
+把它改成「ID 相同」会让 `contains`、`distinct`、`Set`、`Map` 全部行为异常——
+整个集合框架都建立在 `equals` 表示结构相等这个假设上。
+
+</Quiz>
 
 ## 官方参考
 

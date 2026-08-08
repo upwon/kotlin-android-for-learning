@@ -1,19 +1,343 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 6.2 相等性（== / ===）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+一句话记住：**Kotlin 的 `==` 是 Java 的 `equals`，Kotlin 的 `===` 是 Java 的 `==`。**
+这个反转是从 Java 转过来最容易写错的地方之一。
+
+## 1. == 与 ===
+
+```kotlin
+fun main() {
+    val a = StringBuilder("abc").toString()
+    val b = StringBuilder("abc").toString()
+
+    println(a == b)      // true —— 结构相等，调 equals
+    println(a === b)     // false —— 引用相等，两个不同对象
+
+    val c = a
+    println(a === c)     // true —— 同一个对象
+}
+```
+
+| 运算符 | Kotlin | Java 等价 |
+| --- | --- | --- |
+| `==` | 结构相等，编译成 `equals()` | `.equals()` |
+| `===` | 引用相等 | `==` |
+| `!=` | `!equals()` | `!.equals()` |
+| `!==` | 引用不等 | `!=` |
+
+<Callout type="success" title="== 自带 null 检查">
+
+`a == b` 实际编译成：
+
+```kt
+a?.equals(b) ?: (b === null)
+```
+
+所以**不需要先判空**——`null == null` 是 `true`，`null == "x"` 是 `false`，
+都不会 NPE。
+
+对比 Java 里必须写 `Objects.equals(a, b)` 或者手动判空，这是实打实的简化。
+
 </Callout>
 
-## 学习提纲
+## 2. 重写 equals 必须同时重写 hashCode
 
-- 结构相等 == 编译为 equals（含 null 检查）
-- 引用相等 ===
-- 重写 equals 时必须同时重写 hashCode
-- 浮点数相等的特殊规则
+```kotlin
+class BadUser(val id: Int) {
+    override fun equals(other: Any?): Boolean =
+        other is BadUser && other.id == id
+    // 忘了重写 hashCode！
+}
 
-## 与 Java / Android 的关键差异
+class GoodUser(val id: Int) {
+    override fun equals(other: Any?): Boolean =
+        other is GoodUser && other.id == id
+    override fun hashCode(): Int = id
+}
 
-和 Java 相反：== 是 equals，=== 才是引用比较。
+fun main() {
+    val bad = setOf(BadUser(1), BadUser(1))
+    println("BadUser set size = ${bad.size}")     // 2 ⚠️ 应该是 1
+
+    val good = setOf(GoodUser(1), GoodUser(1))
+    println("GoodUser set size = ${good.size}")   // 1 ✅
+
+    println(mapOf(BadUser(1) to "x")[BadUser(1)])   // null ⚠️
+    println(mapOf(GoodUser(1) to "x")[GoodUser(1)]) // x ✅
+}
+```
+
+<Callout type="warn">
+
+契约是：**相等的对象必须有相同的 hashCode**。
+
+违反它的后果不是编译错误，而是 `HashSet`、`HashMap` 行为异常——
+存进去的东西取不出来，去重不生效。而且这类 bug 极难定位。
+
+**最简单的解法：用 `data class`**，编译器会正确生成这两个方法。
+只有在需要「只用部分字段参与相等性」时才手写，那时用 IDE 的
+`Generate → equals() and hashCode()` 而不是手敲。
+
+</Callout>
+
+## 3. 浮点数的特殊规则
+
+```kotlin
+fun main() {
+    val a: Double = Double.NaN
+    println(a == a)              // false —— IEEE 754 规定 NaN != NaN
+
+    // 但装进集合后走的是 equals，行为不同
+    val list = listOf(Double.NaN)
+    println(list.contains(Double.NaN))    // true ⚠️
+
+    println(0.0 == -0.0)                  // true
+    println(listOf(0.0).contains(-0.0))   // false ⚠️
+}
+```
+
+<Callout type="warn" title="静态类型是 Double 还是 Any，行为不一样">
+
+- **静态类型已知是 `Double`/`Float`** → 用 IEEE 754 规则：`NaN != NaN`，`0.0 == -0.0`
+- **静态类型是 `Any` 或泛型 `T`** → 走 `equals()`：`NaN.equals(NaN)` 是 `true`，
+  `(0.0).equals(-0.0)` 是 `false`
+
+这是 IEEE 754 和 `equals` 契约（必须自反）冲突导致的，Java 里也一样。
+
+实践建议：**浮点数不要直接比相等**，用误差范围：
+
+```kotlin
+fun main() {
+    val x = 0.1 + 0.2
+    println(x == 0.3)                          // false！
+    println(kotlin.math.abs(x - 0.3) < 1e-9)   // true ✅
+}
+```
+
+金额一律用 `Int`（分为单位）或 `BigDecimal`，绝不用 `Double`。
+
+</Callout>
+
+## 4. 数组的 equals
+
+```kotlin
+fun main() {
+    val a = intArrayOf(1, 2, 3)
+    val b = intArrayOf(1, 2, 3)
+
+    println(a == b)                 // false —— 数组用的是引用相等
+    println(a.contentEquals(b))     // true
+
+    // 嵌套数组
+    val x = arrayOf(intArrayOf(1), intArrayOf(2))
+    val y = arrayOf(intArrayOf(1), intArrayOf(2))
+    println(x.contentEquals(y))         // false —— 只比一层
+    println(x.contentDeepEquals(y))     // true
+
+    // List 就正常
+    println(listOf(1, 2, 3) == listOf(1, 2, 3))   // true
+}
+```
+
+<Callout type="warn">
+
+**这就是 `data class` 里不能放数组的原因**——生成的 `equals` 会对数组字段
+用引用比较，两个内容相同的对象会不相等。用 `List`。
+
+</Callout>
+
+## 5. equals 的契约
+
+自己实现时必须满足四条：
+
+| 性质 | 含义 |
+| --- | --- |
+| 自反性 | `x.equals(x)` 恒为 true |
+| 对称性 | `x.equals(y)` 与 `y.equals(x)` 结果相同 |
+| 传递性 | `x==y` 且 `y==z` 则 `x==z` |
+| 一致性 | 对象没变时，多次调用结果相同 |
+
+<Callout type="warn" title="继承会破坏对称性">
+
+```kotlin
+open class Point(val x: Int, val y: Int) {
+    override fun equals(other: Any?) = other is Point && other.x == x && other.y == y
+    override fun hashCode() = x * 31 + y
+}
+
+class ColorPoint(x: Int, y: Int, val color: String) : Point(x, y) {
+    override fun equals(other: Any?) =
+        other is ColorPoint && super.equals(other) && other.color == color
+    override fun hashCode() = super.hashCode() * 31 + color.hashCode()
+}
+
+fun main() {
+    val p = Point(1, 2)
+    val cp = ColorPoint(1, 2, "red")
+
+    println(p == cp)     // true  —— Point.equals 只看 x/y
+    println(cp == p)     // false —— ColorPoint.equals 要求 other is ColorPoint
+    // 对称性被破坏了！
+}
+```
+
+这是 Effective Java 里的经典问题，无解——**「可继承的类」和「有值语义的类」
+本质上不可兼得**。
+
+这也是 Kotlin 让 `data class` 隐式 final 的原因：它直接禁止了这个坑。
+需要「带额外字段的变体」时，用**组合**而不是继承。
+
+</Callout>
+
+## 6. Android 场景
+
+<Callout type="tip" title="DiffUtil 依赖正确的 equals">
+
+`RecyclerView` 的 `DiffUtil` 是这个知识点最直接的应用：
+
+```kt
+class ItemDiffCallback : DiffUtil.ItemCallback<Item>() {
+    // 是不是「同一个」条目 → 比 ID（用于判断增删移动）
+    override fun areItemsTheSame(old: Item, new: Item) = old.id == new.id
+
+    // 内容有没有变 → 比全部字段（用于判断是否需要刷新）
+    override fun areContentsTheSame(old: Item, new: Item) = old == new
+}
+```
+
+`areContentsTheSame` 依赖 `Item` 正确实现了 `equals`。
+如果 `Item` 不是 `data class` 又没重写 `equals`，它会退化成引用比较——
+**每次数据更新都全量刷新，动画丢失，性能变差**。
+
+所以：**RecyclerView 的数据模型一律用 `data class`**，
+且字段里不要放数组（用 List）。
+
+</Callout>
+
+其他容易踩的：
+
+```kt
+// Bundle / Intent 里取出的对象是反序列化的新实例，引用一定不同
+val a = intent.getParcelableExtra<User>("user")
+println(a === originalUser)    // false，必须用 ==
+
+// 枚举可以放心用 ===（每个常量是单例），但没必要，== 更统一
+if (theme === Theme.DARK) { }  // 能工作
+if (theme == Theme.DARK) { }   // ✅ 推荐
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      Kotlin 里 <code>a == b</code> 实际编译成什么？
+    </>
+  }
+  options={[
+    'a.equals(b)',
+    'a?.equals(b) ?: (b === null)',
+    'a === b',
+    'Objects.equals(a, b)',
+  ]}
+  answer={1}
+>
+
+`a?.equals(b) ?: (b === null)`——**自带 null 检查**。
+
+所以：
+
+- `null == null` → `true`
+- `null == "x"` → `false`
+- 都不会 NPE
+
+这比 Java 省事很多：Java 里得写 `Objects.equals(a, b)`，或者手动
+`a != null && a.equals(b)`。
+
+顺带记牢那个反转：Kotlin 的 `==` 是 Java 的 `equals`，
+Kotlin 的 `===` 才是 Java 的 `==`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="只重写 equals 不重写 hashCode，会有什么后果？"
+  options={[
+    '编译错误',
+    'HashSet / HashMap 行为异常：相等的对象被当成不同的键，存进去取不出来',
+    '没有影响',
+    '运行时抛异常',
+  ]}
+  answer={1}
+>
+
+不会编译错误，也不会抛异常——只会**静默地行为不对**，这是最难查的一类 bug。
+
+哈希容器先用 `hashCode` 定位桶，再用 `equals` 比对。两个「相等」的对象
+如果 `hashCode` 不同，会被分到不同的桶，永远不会被拿去比较：
+
+- `setOf(User(1), User(1))` 的 size 是 2 而不是 1
+- `map[User(1)]` 返回 null，尽管你刚刚用 `User(1)` 存过
+
+契约是硬性的：**相等的对象必须有相同的 hashCode**。
+
+最省事的解法：用 `data class`，编译器负责生成正确的一对。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>val a = Double.NaN; a == a</code> 和 <code>listOf(Double.NaN).contains(Double.NaN)</code> 分别是？
+    </>
+  }
+  options={[
+    'true, true',
+    'false, false',
+    'false, true',
+    'true, false',
+  ]}
+  answer={2}
+>
+
+`false, true`——同一个值，两种结果。
+
+- `a == a`：静态类型是 `Double`，走 **IEEE 754** 规则，规定 `NaN != NaN`。
+- `contains`：集合内部把元素当 `Any` 处理，走 **`equals()`**，
+  而 `equals` 必须满足自反性，所以 `NaN.equals(NaN)` 是 `true`。
+
+这是浮点标准和 `equals` 契约的固有冲突，Java 里也一样。
+
+实践结论：**浮点数不要比相等**。用 `abs(a - b) < 1e-9`；
+金额一律用 `Int`（分）或 `BigDecimal`。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="RecyclerView 的 DiffUtil 里 areContentsTheSame 通常怎么实现？为什么？"
+  options={[
+    '比较 ID',
+    '用 old == new，依赖数据类正确实现的 equals',
+    '用 old === new',
+    '总是返回 false',
+  ]}
+  answer={1}
+>
+
+`old == new`，依赖 `equals`。两个回调的分工是：
+
+- `areItemsTheSame` → 比 **ID**，判断是不是「同一条」（用于增删移动动画）
+- `areContentsTheSame` → 比**全部内容**，判断这一条要不要重绘
+
+如果数据模型不是 `data class` 又没重写 `equals`，它会退化成引用比较——
+每次刷新时新对象的引用必然不同，于是 `areContentsTheSame` 永远返回 false，
+**列表全量重绘，动画丢失，性能明显变差**。
+
+所以 RecyclerView 的数据模型一律用 `data class`，且字段里用 `List` 而不是数组
+（数组的 `equals` 也是引用比较，会踩同样的坑）。
+
+</Quiz>
 
 ## 官方参考
 

@@ -1,21 +1,317 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 5.1 函数进阶」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一课收尾函数相关的几个特性：中缀、尾递归、函数引用。
+其中**函数引用**比 Java 的方法引用能力强不少，值得单独理解。
+
+## 1. infix 中缀函数
+
+```kotlin
+infix fun Int.times(str: String) = str.repeat(this)
+
+data class Pair2<A, B>(val first: A, val second: B)
+infix fun <A, B> A.link(other: B) = Pair2(this, other)
+
+fun main() {
+    println(2 times "Bye ")
+    println("a" link 1)
+
+    // 标准库里的中缀函数
+    println(1 to "one")           // to 就是中缀函数
+    println(5 shl 2)
+    println(3 in 1..5)
+}
+```
+
+`infix` 的三个条件：**成员函数或扩展函数**、**恰好一个参数**、**参数不是 vararg 也没有默认值**。
+
+<Callout type="warn" title="中缀调用的优先级低于算术运算符">
+
+```kotlin
+infix fun Int.plusTwice(x: Int) = this + x * 2
+
+fun main() {
+    println(1 plusTwice 2 + 3)     // 1 plusTwice (2+3) = 11，不是 (1 plusTwice 2)+3
+}
+```
+
+拿不准就加括号。
+
 </Callout>
 
-## 学习提纲
+<Callout type="tip">
 
-- infix 中缀函数
-- tailrec 尾递归优化
-- vararg 与展开
-- 函数引用 `::foo` 与绑定引用
+`infix` 用对了很出彩（`1 to "one"`、`x shl 2`），但**滥用会严重伤害可读性**。
+标准是：这个调用读起来是不是像自然语言？不是就别用。
 
-## 与 Java / Android 的关键差异
+DSL 里是它的主场，业务代码里克制使用。
 
-方法引用比 Java 更强：可以引用顶层函数、构造函数与属性。
+</Callout>
+
+## 2. tailrec 尾递归
+
+```kotlin
+// 普通递归：深度大了会 StackOverflowError
+fun factorialBad(n: Long): Long = if (n <= 1) 1 else n * factorialBad(n - 1)
+
+// 尾递归：编译器优化成循环
+tailrec fun sum(n: Long, acc: Long = 0): Long =
+    if (n == 0L) acc else sum(n - 1, acc + n)
+
+fun main() {
+    println(sum(100_000))       // 不会栈溢出
+    println(factorialBad(20))
+}
+```
+
+<Callout type="warn" title="必须是「真·尾递归」">
+
+递归调用必须是函数的**最后一个操作**，不能有任何后续计算：
+
+```kt
+tailrec fun bad(n: Int): Int = if (n == 0) 0 else n + bad(n - 1)
+//                                              ^^^ 递归返回后还要做加法 → 不是尾递归
+```
+
+编译器会给警告 `A function is marked as tail-recursive but no tail calls are found`，
+并且**不做优化**。看到这个警告说明你的写法不对，通常需要引入一个累加器参数。
+
+另外：`try`/`catch`/`finally` 块内的递归调用也不能被优化。
+
+</Callout>
+
+Android 上用得不多（业务递归深度通常有限），但处理树形结构（View 层级、
+菜单树、评论嵌套）时值得知道。
+
+## 3. 函数引用
+
+```kotlin
+fun isEven(x: Int) = x % 2 == 0
+
+data class User(val name: String, val age: Int)
+
+fun main() {
+    val numbers = listOf(1, 2, 3, 4, 5)
+
+    // 顶层函数引用
+    println(numbers.filter(::isEven))
+
+    // 成员方法引用
+    println(listOf("a", "bb").map(String::length))
+
+    // 属性引用
+    val users = listOf(User("Summer", 28), User("Xia", 35))
+    println(users.map(User::name))
+    println(users.sortedBy(User::age))
+
+    // 构造函数引用
+    val makeUser: (String, Int) -> User = ::User
+    println(makeUser("Aki", 22))
+
+    // 绑定引用：绑定到某个具体实例
+    val summer = users[0]
+    val getName: () -> String = summer::name
+    println(getName())
+}
+```
+
+<Callout type="java" title="比 Java 方法引用强在哪">
+
+Kotlin 能引用**顶层函数**、**局部函数**、**属性**（Java 只能引用方法）。
+
+属性引用尤其有用：`User::name` 的类型是 `KProperty1<User, String>`，
+它同时是一个 `(User) -> String` 函数，所以能直接传给 `map`。
+Java 里得写 `User::getName`——而且如果属性没有 getter 就没辙了。
+
+</Callout>
+
+## 4. 属性引用的额外能力
+
+```kotlin
+class Counter {
+    var count: Int = 0
+}
+
+fun main() {
+    val c = Counter()
+    val ref = c::count
+
+    println(ref.get())
+    ref.set(42)
+    println(c.count)
+    println(ref.name)         // 拿到属性名
+}
+```
+
+可变属性的引用是 `KMutableProperty`，能读能写，还能拿到名字——
+这正是属性委托能用属性名做 key 的基础。
+
+## 5. vararg 与展开
+
+已在 [1.3 函数](/docs/01-basics/functions)讲过，这里补一个细节：
+
+```kotlin
+fun log(tag: String, vararg messages: String, separator: String = " | ") =
+    "[$tag] ${messages.joinToString(separator)}"
+
+fun main() {
+    println(log("APP", "启动", "加载配置"))
+
+    // vararg 后面还有参数时，必须用具名实参传
+    println(log("APP", "a", "b", separator = " → "))
+
+    val items = arrayOf("x", "y")
+    println(log("APP", *items, "z"))
+}
+```
+
+Kotlin 的 `vararg` **不必是最后一个参数**（Java 必须是），
+后面的参数用具名实参传即可。
+
+## 6. 局部函数与闭包
+
+```kotlin
+fun processOrders(orders: List<Int>): String {
+    var total = 0
+    val errors = mutableListOf<String>()
+
+    // 局部函数能读写外层的局部变量
+    fun process(amount: Int) {
+        if (amount < 0) {
+            errors += "金额不能为负：$amount"
+            return
+        }
+        total += amount
+    }
+
+    orders.forEach(::process)
+    return "总计 $total，错误 ${errors.size} 个"
+}
+
+fun main() {
+    println(processOrders(listOf(100, -5, 200)))
+}
+```
+
+<Callout type="java" title="Kotlin 的闭包可以修改捕获的变量">
+
+Java 的 lambda 只能捕获 **effectively final** 的变量——想累加只能用数组
+`int[] total = {0}` 这种 hack。
+
+Kotlin 没有这个限制：闭包捕获的是**变量本身**（编译后会包装成一个 `Ref` 对象），
+所以可以自由读写。
+
+代价是这个包装对象带来的一点分配开销，但换来的是能正常写代码。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>tailrec fun f(n: Int): Int = if (n == 0) 0 else n + f(n - 1)</code>
+      <br />
+      这段代码会怎样？
+    </>
+  }
+  options={[
+    '正常优化成循环',
+    '编译器警告「没有找到尾调用」，且不做优化，深度大时仍会栈溢出',
+    '编译错误',
+    '运行时报错',
+  ]}
+  answer={1}
+>
+
+这**不是**尾递归——`f(n-1)` 返回之后还要做 `n + ...` 的加法，
+递归调用不是最后一个操作。
+
+编译器会给警告 `A function is marked as tail-recursive but no tail calls are found`，
+并且**不做优化**，深度大了照样栈溢出。
+
+改成真尾递归需要引入累加器：
+
+```
+tailrec fun f(n: Int, acc: Int = 0): Int = if (n == 0) acc else f(n - 1, acc + n)
+```
+
+另外注意：`try`/`catch`/`finally` 里的递归调用也无法被优化。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="Kotlin 的函数引用比 Java 的方法引用多了哪些能力？"
+  options={[
+    '没有区别',
+    '可以引用顶层函数、局部函数和属性',
+    '可以引用私有方法',
+    '性能更好',
+  ]}
+  answer={1}
+>
+
+Java 只能引用**方法**（含构造函数）。Kotlin 还能引用：
+
+- **顶层函数**：`::isEven`
+- **局部函数**：定义在函数内部的
+- **属性**：`User::name`
+
+属性引用最有价值——`User::name` 的类型是 `KProperty1<User, String>`，
+它同时也是 `(User) -> String`，可以直接传给 `map`、`sortedBy`。
+可变属性还能 `.set()`，并且能读到 `.name`（属性名）。
+
+Java 里得写 `User::getName`，而且只对有 getter 的属性有效。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="Kotlin 的 lambda 能修改捕获的外部变量吗？"
+  options={[
+    '不能，和 Java 一样要求 effectively final',
+    '能，编译后变量被包装成 Ref 对象',
+    '只能修改成员变量，不能修改局部变量',
+    '能，但需要加 @Volatile',
+  ]}
+  answer={1}
+>
+
+**能**。这是相对 Java 的一个实际改进。
+
+Java 要求捕获的局部变量是 effectively final，想在 lambda 里累加只能用
+`int[] counter = {0}` 这种绕法。
+
+Kotlin 编译时会把被修改的捕获变量包装成一个 `Ref.IntRef` 之类的对象，
+lambda 持有这个包装对象的引用，从而实现读写。
+
+代价是多一次对象分配。绝大多数情况无所谓，但在极热的循环里如果发现
+意外的分配，这可能是原因之一。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      <code>infix fun Int.plusTwice(x: Int) = this + x * 2</code>，
+      那么 <code>1 plusTwice 2 + 3</code> 的结果是？
+    </>
+  }
+  options={['11', '8', '13', '编译错误']}
+  answer={0}
+>
+
+**11**。中缀调用的优先级**低于**算术运算符，所以先算 `2 + 3 = 5`，
+再算 `1 plusTwice 5` = `1 + 5 * 2` = 11。
+
+如果按 `(1 plusTwice 2) + 3` 理解会得到 `1 + 2*2 + 3 = 8`，这是错的。
+
+这就是 `infix` 需要克制使用的原因之一——优先级不直观。
+拿不准时加括号，或者干脆用普通的方法调用语法。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[functions](https://book.kotlincn.net/text/functions.html)
-- 官方英文：[functions](https://kotlinlang.org/docs/functions.html)
+- 官方英文：[functions](https://kotlinlang.org/docs/functions.html) ／ [reflection](https://kotlinlang.org/docs/reflection.html)

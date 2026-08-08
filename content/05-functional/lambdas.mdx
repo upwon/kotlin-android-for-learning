@@ -1,20 +1,362 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 5.2 Lambda & 高阶函数」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Kotlin 里**函数类型是一等公民**——`(Int) -> String` 和 `String` 一样是类型，
+可以做参数、返回值、变量、泛型实参。这比 Java 那套「必须有个接口才能传行为」自由得多。
+其中**带接收者的函数字面量**是 Compose 和所有 Kotlin DSL 的地基。
+
+## 1. 函数类型
+
+```kotlin
+fun main() {
+    val add: (Int, Int) -> Int = { a, b -> a + b }
+    val greet: (String) -> String = { "你好，$it" }
+    val log: (String) -> Unit = { println("[LOG] $it") }
+    val supply: () -> Int = { 42 }
+
+    println(add(1, 2))
+    println(greet("Summer"))
+    log("test")
+    println(supply())
+
+    // 函数类型也可以可空
+    val maybe: ((Int) -> Int)? = null
+    println(maybe?.invoke(1))
+}
+```
+
+<Callout type="warn" title="可空函数类型的括号不能省">
+
+```kt
+val a: ((Int) -> Int)? = null   // 可空的函数类型
+val b: (Int) -> Int? = { null } // 返回可空 Int 的函数
+```
+
+两者完全不同。调用可空函数类型要用 `?.invoke(...)`，不能写 `a?(1)`。
+
 </Callout>
 
-## 学习提纲
+## 2. lambda 语法
 
-- 函数类型 `(Int) -> String` 与函数类型的可空性
-- lambda 语法、it、尾随 lambda
-- 带接收者的函数字面量 `T.() -> Unit`（DSL 的基础）
-- 匿名函数与 lambda 的 return 差异
-- 闭包可以修改捕获的变量
+```kotlin
+fun main() {
+    val list = listOf(1, 2, 3)
 
-## 与 Java / Android 的关键差异
+    // 完整写法
+    println(list.map({ x: Int -> x * 2 }))
 
-Java lambda 只能捕获 effectively final 变量，Kotlin 没有这个限制。
+    // 类型可推断
+    println(list.map({ x -> x * 2 }))
+
+    // 单参数时用 it
+    println(list.map({ it * 2 }))
+
+    // 最后一个参数是 lambda 时，可以挪到括号外
+    println(list.map() { it * 2 })
+
+    // 括号里没别的参数时，括号可以省
+    println(list.map { it * 2 })
+
+    // 多参数
+    println(list.mapIndexed { index, value -> "$index:$value" })
+
+    // 不需要的参数用下划线
+    println(list.mapIndexed { _, value -> value * 10 })
+
+    // lambda 的返回值是最后一个表达式
+    println(list.map {
+        val doubled = it * 2
+        doubled + 1
+    })
+}
+```
+
+<Callout type="warn" title="it 只在单参数时可用，且嵌套时容易混淆">
+
+```kt
+// 😵 两层 it，读的人要停下来想
+list.forEach { outer ->
+    outer.items.forEach { it.doSomething() }
+}
+
+// ✅ 嵌套时给外层起名
+list.forEach { group ->
+    group.items.forEach { item -> item.doSomething() }
+}
+```
+
+规则：**只有一层 lambda 时用 `it`，嵌套时一律显式命名。**
+
+</Callout>
+
+## 3. 带接收者的函数字面量
+
+这是 Kotlin 最有特色的特性之一：
+
+```kotlin
+class HtmlBuilder {
+    private val sb = StringBuilder()
+    fun p(text: String) { sb.append("<p>$text</p>") }
+    fun h1(text: String) { sb.append("<h1>$text</h1>") }
+    override fun toString() = sb.toString()
+}
+
+// 参数类型是 HtmlBuilder.() -> Unit，不是 (HtmlBuilder) -> Unit
+fun html(block: HtmlBuilder.() -> Unit): String =
+    HtmlBuilder().apply(block).toString()
+
+fun main() {
+    val page = html {
+        h1("标题")          // 不需要写 it.h1(...)
+        p("段落一")
+        p("段落二")
+    }
+    println(page)
+}
+```
+
+| 写法 | lambda 内部怎么访问 |
+| --- | --- |
+| `(T) -> R` | 通过参数 `it` 或自定义名字 |
+| `T.() -> R` | 通过**隐式的 `this`**，可以省略 |
+
+<Callout type="success">
+
+`T.() -> R` 就是「作用域函数」和「所有 Kotlin DSL」的原理。
+
+`apply`、`run`、`with` 都是这么定义的；Gradle KTS 的
+`android { compileSdk = 34 }`、Compose 的 `Column { Text("hi") }`
+也全都是它。
+
+理解了这一个特性，那些看起来很神奇的 DSL 就没有神秘感了。详见
+[9.4 类型安全构建器](/docs/09-advanced/type-safe-builders)。
+
+</Callout>
+
+## 4. 高阶函数
+
+```kotlin
+// 接受函数
+fun <T> List<T>.customFilter(predicate: (T) -> Boolean): List<T> {
+    val result = mutableListOf<T>()
+    for (item in this) if (predicate(item)) result += item
+    return result
+}
+
+// 返回函数
+fun multiplier(factor: Int): (Int) -> Int = { it * factor }
+
+// 函数组合
+fun <A, B, C> compose(f: (A) -> B, g: (B) -> C): (A) -> C = { g(f(it)) }
+
+fun main() {
+    println(listOf(1, 2, 3, 4).customFilter { it % 2 == 0 })
+
+    val triple = multiplier(3)
+    println(triple(5))
+
+    val addOne: (Int) -> Int = { it + 1 }
+    val toText: (Int) -> String = { "结果是 $it" }
+    println(compose(addOne, toText)(10))
+}
+```
+
+## 5. 匿名函数：为了 return 的语义
+
+```kotlin
+fun main() {
+    val list = listOf(1, 2, 3, 4)
+
+    // lambda 里的 return 是非局部返回，要用 return@forEach
+    list.forEach {
+        if (it == 3) return@forEach
+        print("$it ")
+    }
+    println()
+
+    // 匿名函数里的 return 就是普通的局部返回
+    list.forEach(fun(value: Int) {
+        if (value == 3) return
+        print("$value ")
+    })
+    println()
+
+    // 匿名函数还能显式声明返回类型
+    val parse = fun(s: String): Int? = s.toIntOrNull()
+    println(parse("42"))
+}
+```
+
+| | lambda | 匿名函数 |
+| --- | --- | --- |
+| 语法 | `{ x -> ... }` | `fun(x: Int) { ... }` |
+| `return` 的含义 | 非局部返回（返回外层函数） | 局部返回（返回自己） |
+| 返回类型 | 推断 | 可显式声明 |
+| 参数类型 | 常可省略 | 必须写 |
+
+实践中 90% 用 lambda，只有在需要局部 `return` 或者多个 return 点时才用匿名函数。
+
+## 6. Android 场景
+
+```kt
+// 回调参数
+class MyAdapter(
+    private val onItemClick: (Item) -> Unit,
+    private val onItemLongClick: (Item) -> Boolean = { false },
+) : RecyclerView.Adapter<VH>()
+
+// 用起来
+MyAdapter(
+    onItemClick = { item -> findNavController().navigate(toDetail(item.id)) },
+    onItemLongClick = { item -> showMenu(item); true },
+)
+
+// 带接收者的扩展，构建 Intent
+inline fun Context.intentFor(cls: Class<*>, block: Intent.() -> Unit = {}): Intent =
+    Intent(this, cls).apply(block)
+
+startActivity(intentFor(DetailActivity::class.java) {
+    putExtra("id", 1L)
+    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP
+})
+```
+
+<Callout type="warn" title="lambda 捕获 Activity 会泄漏">
+
+```kt
+// ❌ 这个 lambda 隐式持有 Activity 引用，
+//    如果 repository 是单例，Activity 就泄漏了
+repository.registerCallback { updateUi(it) }
+
+// ✅ 在生命周期结束时反注册
+override fun onDestroy() {
+    repository.unregisterCallback(callback)
+    super.onDestroy()
+}
+
+// ✅✅ 或者用协程 + lifecycleScope，自动跟随生命周期
+lifecycleScope.launch {
+    repository.dataFlow.collect { updateUi(it) }
+}
+```
+
+lambda 不是「轻量的」——它捕获了什么，就持有什么多久。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>(HtmlBuilder) -&gt; Unit</code> 和 <code>HtmlBuilder.() -&gt; Unit</code> 的区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    '前者通过参数 it 访问，后者 HtmlBuilder 成为隐式 this，成员可以直接调用',
+    '后者性能更好',
+    '前者不能作为参数类型',
+  ]}
+  answer={1}
+>
+
+`T.() -> R` 是**带接收者的函数类型**：lambda 体内 `T` 的实例成为**隐式的 `this`**，
+所以可以直接写 `h1("标题")` 而不是 `it.h1("标题")`。
+
+这就是所有 Kotlin DSL 的地基：
+
+- `apply` / `run` / `with` 全是这么定义的
+- Gradle KTS 的 `android { compileSdk = 34 }`
+- Compose 的 `Column { Text("hi") }`
+
+理解了这一点，那些「看起来很神奇」的 DSL 就变成普通的高阶函数调用了。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>val f: ((Int) -&gt; Int)?</code> 和 <code>val g: (Int) -&gt; Int?</code> 有什么区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    'f 是可空的函数；g 是一个返回可空 Int 的函数',
+    'f 是返回可空值的函数；g 是可空的函数',
+    '两个都编译不过',
+  ]}
+  answer={1}
+>
+
+括号的位置决定了 `?` 修饰谁：
+
+- `((Int) -> Int)?` —— **整个函数类型**可空，`f` 本身可能是 null。
+  调用要写 `f?.invoke(1)`。
+- `(Int) -> Int?` —— 函数一定存在，但它的**返回值**可空。直接 `g(1)` 调用。
+
+这是写回调属性时的高频写法：
+
+```
+var onProgress: ((Int) -> Unit)? = null      // 回调可能没设置
+onProgress?.invoke(50)
+```
+
+注意可空函数类型不能写成 `f?(1)`，必须用 `?.invoke(...)`。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="lambda 和匿名函数的 return 语义有什么区别？"
+  options={[
+    '没有区别',
+    'lambda 里的 return 返回外层函数（非局部返回）；匿名函数里的 return 只返回匿名函数自己',
+    'lambda 里不能写 return',
+    '匿名函数里不能写 return',
+  ]}
+  answer={1}
+>
+
+这正是匿名函数存在的主要理由。
+
+- **lambda**：`return` 是**非局部返回**，直接结束外层函数。想只跳过本次要写
+  `return@forEach`。
+- **匿名函数**：`fun(x: Int) { ... }` 里的 `return` 就是普通的局部返回。
+
+```
+list.forEach(fun(v: Int) { if (v == 3) return; print(v) })    // 跳过 3，继续
+list.forEach { if (it == 3) return; print(it) }               // 直接结束外层函数！
+```
+
+详细原理（inline 展开）见 [3.2 返回与跳转](/docs/03-control-flow/returns-and-jumps)。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="关于 lambda 在 Android 上的使用，哪些说法正确？"
+  options={[
+    'lambda 会捕获它引用到的外部对象，可能导致内存泄漏',
+    '把 lambda 注册到单例里而不反注册，会让 Activity 无法回收',
+    'lambda 是轻量的，不会持有强引用',
+    '嵌套 lambda 时应该给参数显式命名而不是都用 it',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+A、B 说的是同一件事：**lambda 捕获了什么，就持有什么多久**。
+在 Activity 里写 `repository.registerCallback { updateUi(it) }`，
+这个 lambda 隐式持有 Activity 的引用；如果 `repository` 是单例，Activity 就泄漏了。
+
+解法：在 `onDestroy` 反注册，或者改用 `lifecycleScope.launch { flow.collect { } }`
+让协程跟随生命周期自动取消。
+
+**C 错**：捕获的是强引用。
+
+**D 对**：两层 `it` 会让读代码的人必须停下来推断哪个是哪个。一层用 `it`，嵌套就命名。
+
+</Quiz>
 
 ## 官方参考
 

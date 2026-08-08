@@ -1,22 +1,389 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 6.1 空安全深入（?. / ?: / !! / let）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+[1.2](/docs/01-basics/val-var-null-safety) 讲了空安全的世界观，这一课把它落到每一种具体写法，
+并且重点讲两个 Android 上真正会出问题的地方：**平台类型**和**可空集合的三种含义**。
+
+## 1. 四个运算符的完整用法
+
+```kotlin
+data class Address(val city: String?, val zip: String?)
+data class User(val name: String, val address: Address?)
+
+fun main() {
+    val u: User? = User("Summer", Address("杭州", null))
+
+    // ?. 安全调用，可以链式
+    println(u?.address?.city)
+    println(u?.address?.zip)
+
+    // ?: Elvis，左边为 null 时取右边
+    println(u?.address?.zip ?: "未填写")
+
+    // ?.let 非空时执行一段逻辑
+    u?.address?.city?.let { city ->
+        println("城市是 $city，长度 ${city.length}")
+    }
+
+    // ?: 右边可以是 return / throw
+    fun cityOf(user: User?): String {
+        val city = user?.address?.city ?: return "未知"
+        return city.uppercase()
+    }
+    println(cityOf(u))
+    println(cityOf(null))
+}
+```
+
+<Callout type="tip" title="安全调用链的短路语义">
+
+`a?.b?.c?.d` 中任何一环为 null，**整个表达式立刻是 null**，后面不再求值。
+
+这和写一串嵌套 `if` 等价，但没有嵌套。这是 Kotlin 里可读性提升最明显的一处。
+
 </Callout>
 
-## 学习提纲
+## 2. 安全调用 + 赋值 / 函数调用
 
-- 安全调用链与 `?.let {}`
-- Elvis `?:` 与提前返回 `?: return`
-- `!!` 的合理使用场景（几乎没有）
-- 平台类型 `String!`：来自 Java 的隐患
-- 可空集合的三种含义：`List<T>?` / `List<T?>` / `List<T?>?`
+```kotlin
+class Box {
+    var value: String? = null
+}
 
-## 与 Java / Android 的关键差异
+fun main() {
+    val b: Box? = Box()
 
-Android SDK 大量返回平台类型，注解不全时空安全会「漏气」。
+    b?.value = "hi"        // 只有 b 非空时才赋值
+    println(b?.value)
+
+    val nullBox: Box? = null
+    nullBox?.value = "x"   // 什么也不发生，不会崩
+    println("没有崩溃")
+
+    // 安全调用配合集合函数
+    val list: List<String>? = null
+    println(list?.map { it.length } ?: emptyList<Int>())
+    println(list.orEmpty().size)     // 更简洁
+}
+```
+
+## 3. !! 的正确用法（几乎没有）
+
+```kotlin
+fun main() {
+    val s: String? = "hello"
+    println(s!!.length)          // 断言非空，为 null 就抛异常
+
+    val n: String? = null
+    println(runCatching { n!!.length }.exceptionOrNull()?.javaClass?.simpleName)
+}
+```
+
+<Callout type="warn" title="用 requireNotNull / checkNotNull 代替裸的 !!">
+
+两者都会崩，但后者能带上原因：
+
+```kt
+// ❌ 崩了只知道「某处 NPE」
+val user = repository.currentUser!!
+
+// ✅ 崩了知道是什么、为什么
+val user = requireNotNull(repository.currentUser) {
+    "用户未登录，不应进入此页面"
+}
+```
+
+- `requireNotNull(x) { }` → 抛 `IllegalArgumentException`，用于校验**参数/输入**
+- `checkNotNull(x) { }` → 抛 `IllegalStateException`，用于校验**状态**
+
+线上崩溃日志里，这个差别的价值非常大。detekt 有规则可以直接禁掉 `!!`。
+
+</Callout>
+
+## 4. 平台类型：空安全的漏洞
+
+这是 Android 上最需要理解的一节。
+
+```kt
+// Java 代码
+public class JavaApi {
+    public String getName() { return null; }
+}
+```
+
+```kt
+// Kotlin 调用
+val api = JavaApi()
+val name = api.getName()      // 推断类型是 String!（平台类型）
+println(name.length)          // 编译通过！运行时 NPE
+```
+
+<Callout type="warn" title="String! 是什么">
+
+`String!` 表示「**编译器不知道它能不能为 null**」——因为 Java 代码没有可空性信息。
+
+编译器对平台类型**不做任何空检查**，你可以像非空类型一样用它，
+出了事是运行时 NPE。这是为了 Java 互操作不得不做的妥协。
+
+</Callout>
+
+**三条防御策略**：
+
+```kt
+// 1. 接收 Java 返回值时，显式声明为可空类型
+val name: String? = api.getName()      // 强制自己处理
+println(name?.length ?: 0)
+
+// 2. 相信 @Nullable / @NonNull 注解
+//    Java 侧加了 androidx.annotation 注解后，Kotlin 会识别成 String? / String
+@Nullable public String getName() { }   // → Kotlin 侧是 String?
+
+// 3. 立刻转成非空，失败得早一点
+val name = requireNotNull(api.getName()) { "name 不应为 null" }
+```
+
+<Callout type="tip" title="Android SDK 的注解覆盖情况">
+
+好消息是 AndroidX 和大部分 Android SDK 已经加了 `@Nullable` / `@NonNull` 注解，
+所以 `findViewById`、`getArguments()` 这些在 Kotlin 里会被正确识别为可空。
+
+需要警惕的是：**老的第三方库**和**你自己项目里的旧 Java 代码**。
+迁移时给 Java 侧补注解，比在 Kotlin 侧到处 `!!` 划算得多。
+
+</Callout>
+
+## 5. 可空集合的三种含义
+
+```kotlin
+fun main() {
+    val a: List<String>? = null            // 集合本身可空
+    val b: List<String?> = listOf("x", null)  // 元素可空
+    val c: List<String?>? = null           // 都可空
+
+    println(a?.size)
+    println(b.filterNotNull())             // 去掉 null 元素
+    println(c?.filterNotNull())
+
+    // 常用工具
+    println(a.orEmpty())                   // null → 空集合
+    println(a.isNullOrEmpty())
+    println(b.mapNotNull { it?.uppercase() })   // 映射并去 null
+}
+```
+
+| 写法 | 含义 |
+| --- | --- |
+| `List<String>?` | 可能没有这个列表 |
+| `List<String?>` | 列表一定存在，但里面可能有 null |
+| `List<String?>?` | 两者都可能 |
+
+<Callout type="warn">
+
+API 设计时**尽量避免可空集合**——「没有数据」用**空集合**表达比用 null 好：
+调用方不需要判空，`for` 循环直接跑零次。
+
+```kt
+// 😐 调用方必须判空
+fun loadItems(): List<Item>?
+
+// ✅ 没有就返回 emptyList()
+fun loadItems(): List<Item>
+```
+
+只有当「空列表」和「没有列表」需要被区分时（比如「还没加载」vs「加载了但是空的」），
+才用可空——而那种情况通常更适合用 sealed class 建模。
+
+</Callout>
+
+## 6. 泛型中的可空性
+
+```kotlin
+// T 的默认上界是 Any?，所以 T 本身可能可空
+fun <T> firstOrDefault(list: List<T>, default: T): T =
+    list.firstOrNull() ?: default
+
+// T : Any 保证非空
+fun <T : Any> requireFirst(list: List<T>): T =
+    list.firstOrNull() ?: error("列表为空")
+
+fun main() {
+    println(firstOrDefault(listOf(1, 2), 0))
+    println(firstOrDefault(listOf<String?>(null), "默认"))
+    println(requireFirst(listOf("a")))
+}
+```
+
+## 7. Android 实战
+
+```kt
+// Fragment 里的 View 引用：onDestroyView 后必须清掉
+class MyFragment : Fragment() {
+    private var _binding: FragmentMyBinding? = null
+    private val binding get() = _binding!!     // ← 这个 !! 是可接受的
+
+    override fun onCreateView(...): View {
+        _binding = FragmentMyBinding.inflate(inflater, container, false)
+        return binding.root
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null      // 防止内存泄漏
+    }
+}
+```
+
+<Callout type="warn" title="上面那个 !! 为什么可以接受">
+
+因为它的失败模式是**明确且可诊断**的：在 `onCreateView` 之前或 `onDestroyView`
+之后访问 `binding` 就会崩——这本来就是编程错误，早崩比静默出错好。
+
+这是极少数「`!!` 优于可空处理」的场景。注意它配套的 `onDestroyView` 里置 null
+不是可选的，那是防止 Fragment 泄漏 View 的关键。
+
+更省事的做法是用 `viewbindingpropertydelegate` 这类库，把整套逻辑封装成一个委托。
+
+</Callout>
+
+其他常见处理：
+
+```kt
+// Intent 取值
+val id = intent.getStringExtra("id") ?: run {
+    finish()
+    return
+}
+
+// Bundle 参数
+val args = requireArguments()      // 比 arguments!! 好，异常信息更清楚
+
+// Context
+val ctx = context ?: return        // Fragment 的 context 可能为 null
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      Kotlin 调用 Java 方法拿到 <code>String!</code> 类型，这意味着什么？
+    </>
+  }
+  options={[
+    '一定不为 null',
+    '一定为 null',
+    '编译器不知道能否为 null，不做检查，用错了是运行时 NPE',
+    '这是一种新的字符串类型',
+  ]}
+  answer={2}
+>
+
+`String!` 是**平台类型** platform type——Java 代码没携带可空性信息，
+编译器无从判断，于是放弃检查。
+
+你可以像非空类型一样用它（不需要 `?.`），但如果实际是 null，就是运行时 NPE——
+空安全的保证在这里出现了缺口。
+
+三条防御：
+
+1. 接收时**显式声明为可空**：`val name: String? = api.getName()`
+2. 给 Java 侧**补 `@Nullable`/`@NonNull` 注解**（AndroidX 已经做了）
+3. 用 `requireNotNull(...)` 立刻断言，让失败发生在源头而不是三层调用之后
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>List&lt;String&gt;?</code>、<code>List&lt;String?&gt;</code>、
+      <code>List&lt;String?&gt;?</code> 分别是什么含义？
+    </>
+  }
+  options={[
+    '完全一样',
+    '依次是：集合可空 / 元素可空 / 两者都可空',
+    '依次是：元素可空 / 集合可空 / 两者都可空',
+    '只有第一个是合法写法',
+  ]}
+  answer={1}
+>
+
+`?` 修饰谁，谁就可空：
+
+- `List<String>?` —— 可能没有这个列表，但如果有，元素都非空
+- `List<String?>` —— 列表一定存在，但里面可能混着 null
+- `List<String?>?` —— 两者都可能
+
+API 设计建议：**避免可空集合**，「没有数据」用 `emptyList()` 表达。
+调用方不用判空，`for` 循环直接跑零次，处处都省事。
+
+只有当「空列表」和「没有列表」是两种需要区分的业务状态时才用可空——
+而那种情况通常更适合 sealed class。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      为什么推荐用 <code>requireNotNull(x) {'{'} "原因" {'}'}</code> 而不是 <code>x!!</code>？
+    </>
+  }
+  options={[
+    'requireNotNull 不会抛异常',
+    '两者都会崩，但 requireNotNull 能带上原因，线上崩溃日志可诊断',
+    'requireNotNull 性能更好',
+    '!! 已被废弃',
+  ]}
+  answer={1}
+>
+
+两者都会崩——区别在**崩溃时你能知道多少**。
+
+`x!!` 抛的是 `NullPointerException`，日志里只有一个行号。
+`requireNotNull(x) { "用户未登录，不应进入此页面" }` 抛的
+`IllegalArgumentException` 带着你写的原因。
+
+线上排查时这个差别是决定性的。
+
+两个变体的语义区分：`requireNotNull` 校验**参数/输入**（抛 `IllegalArgumentException`），
+`checkNotNull` 校验**状态**（抛 `IllegalStateException`）。
+
+detekt 有规则可以直接禁掉 `!!`，值得在项目里开启。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      Fragment 里 <code>private val binding get() = _binding!!</code> 这个 <code>!!</code> 为什么可以接受？
+    </>
+  }
+  options={[
+    '因为 Fragment 是特殊的',
+    '因为它的失败模式明确：只有在 onCreateView 前或 onDestroyView 后访问才会崩，那本就是编程错误',
+    '因为 binding 永远不会是 null',
+    '其实不可以接受，应该用 ?.',
+  ]}
+  answer={1}
+>
+
+这是极少数 `!!` 比可空处理更好的场景。
+
+理由是**失败模式明确且可诊断**：只有在 View 生命周期之外访问 binding 才会崩，
+而那本来就是代码写错了——早崩比静默返回 null、然后在别处出现诡异行为要好。
+
+如果改成 `_binding?.textView?.text = "x"`，写错生命周期时会静默什么都不做，
+问题更难发现。
+
+但要记住配套动作：**`onDestroyView` 里必须 `_binding = null`**，
+否则 Fragment 会泄漏整个 View 树（Fragment 实例的存活时间比它的 View 长）。
+
+想省事就用 `viewbindingpropertydelegate` 之类的库，把这套逻辑封装成属性委托。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[null-safety](https://book.kotlincn.net/text/null-safety.html)
-- 官方英文：[null-safety](https://kotlinlang.org/docs/null-safety.html)
+- 官方英文：[null-safety](https://kotlinlang.org/docs/null-safety.html) ／ [java-interop](https://kotlinlang.org/docs/java-interop.html)
