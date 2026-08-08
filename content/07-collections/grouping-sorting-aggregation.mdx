@@ -1,21 +1,374 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 7.3 分组 / 排序 / 聚合」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+分组、排序、聚合——Java 里要靠 `Collectors.groupingBy`、
+`Comparator.comparing().thenComparing()` 拼出来的东西，Kotlin 里都是集合上的直接方法。
+
+## 1. groupBy
+
+```kotlin
+data class Order(val id: Int, val user: String, val amount: Int, val status: String)
+
+fun main() {
+    val orders = listOf(
+        Order(1, "Summer", 100, "paid"),
+        Order(2, "Xia", 250, "pending"),
+        Order(3, "Summer", 80, "paid"),
+        Order(4, "Aki", 300, "paid"),
+    )
+
+    // 按字段分组 → Map<String, List<Order>>
+    val byUser = orders.groupBy { it.user }
+    println(byUser.keys)
+    println(byUser["Summer"]?.size)
+
+    // 同时指定 key 和 value
+    println(orders.groupBy({ it.status }, { it.amount }))
+
+    // 分组后聚合
+    println(orders.groupBy { it.user }.mapValues { (_, list) -> list.sumOf { it.amount } })
+}
+```
+
+<Callout type="tip" title="groupingBy 更适合「分组后立刻聚合」">
+
+```kotlin
+data class Order(val user: String, val amount: Int)
+
+fun main() {
+    val orders = listOf(
+        Order("Summer", 100), Order("Xia", 250), Order("Summer", 80),
+    )
+
+    // groupBy 会先建出完整的 Map<String, List<Order>>
+    println(orders.groupBy { it.user }.mapValues { (_, v) -> v.sumOf { it.amount } })
+
+    // groupingBy 是惰性的，不生成中间的 List
+    println(orders.groupingBy { it.user }.fold(0) { acc, o -> acc + o.amount })
+
+    // 计数
+    println(orders.groupingBy { it.user }.eachCount())
+}
+```
+
+数据量大时 `groupingBy` 能省下中间集合。日常小数据用 `groupBy` 可读性更好。
+
 </Callout>
 
-## 学习提纲
+## 2. 排序
 
-- groupBy / groupingBy / partition
-- sortedBy / sortedWith / compareBy 链式比较器
-- fold / reduce / sumOf / maxByOrNull
-- chunked / windowed
+```kotlin
+data class User(val name: String, val age: Int, val city: String)
 
-## 与 Java / Android 的关键差异
+fun main() {
+    val users = listOf(
+        User("Summer", 28, "杭州"),
+        User("Xia", 35, "北京"),
+        User("Aki", 28, "上海"),
+    )
 
-Collectors.groupingBy 的等价物更短，比较器用 compareBy 组合。
+    println(users.sortedBy { it.age }.map { it.name })
+    println(users.sortedByDescending { it.age }.map { it.name })
+
+    // 多字段排序：先按年龄，年龄相同按名字
+    println(users.sortedWith(compareBy({ it.age }, { it.name })).map { it.name })
+
+    // 混合升降序
+    println(
+        users.sortedWith(
+            compareByDescending<User> { it.age }.thenBy { it.name }
+        ).map { it.name }
+    )
+
+    // 自然排序
+    println(listOf(3, 1, 2).sorted())
+    println(listOf("b", "a").sortedDescending())
+
+    // 原地排序（只对 MutableList）
+    val m = mutableListOf(3, 1, 2)
+    m.sort()
+    println(m)
+}
+```
+
+<Callout type="warn" title="sorted 返回新集合，sort 原地修改">
+
+| 函数 | 作用 | 适用 |
+| --- | --- | --- |
+| `sorted()` / `sortedBy {}` | 返回**新集合** | 任何 `Iterable` |
+| `sort()` / `sortBy {}` | **原地**排序 | 只有 `MutableList` |
+
+命名规律：**带 `ed` 的返回新集合，不带的原地修改**。
+同样的规律也适用于 `reversed()`/`reverse()`、`shuffled()`/`shuffle()`。
+
+</Callout>
+
+<Callout type="tip" title="compareBy 是可组合的">
+
+```kt
+// 比手写 Comparator 清楚得多
+val comparator = compareByDescending<Order> { it.priority }
+    .thenBy { it.createdAt }
+    .thenBy { it.id }
+
+list.sortedWith(comparator)
+```
+
+`nullsFirst()` / `nullsLast()` 处理可空字段：
+
+```kotlin
+fun main() {
+    val list = listOf("b", null, "a")
+    println(list.sortedWith(nullsFirst(naturalOrder())))
+    println(list.sortedWith(nullsLast(naturalOrder())))
+}
+```
+
+</Callout>
+
+## 3. 聚合
+
+```kotlin
+fun main() {
+    val nums = listOf(3, 1, 4, 1, 5, 9, 2, 6)
+
+    println(nums.sum())
+    println(nums.average())
+    println(nums.count())
+    println(nums.count { it > 3 })
+    println(nums.maxOrNull())
+    println(nums.minOrNull())
+
+    data class P(val name: String, val score: Int)
+    val ps = listOf(P("a", 90), P("b", 75))
+
+    println(ps.sumOf { it.score })
+    println(ps.maxByOrNull { it.score })       // 返回元素
+    println(ps.maxOfOrNull { it.score })       // 返回值
+    println(ps.minByOrNull { it.score })
+
+    // 布尔聚合
+    println(nums.any { it > 8 })
+    println(nums.all { it > 0 })
+    println(nums.none { it > 100 })
+
+    // 拼字符串
+    println(ps.joinToString(separator = ", ", prefix = "[", postfix = "]") { it.name })
+}
+```
+
+<Callout type="warn" title="maxBy 和 maxOf 别搞混">
+
+- `maxByOrNull { it.score }` → 返回**分数最高的那个元素**（`P`）
+- `maxOfOrNull { it.score }` → 返回**最高的分数**（`Int`）
+
+老版本的 `maxBy` / `max` 在空集合上抛异常，Kotlin 1.4 后统一改成了
+`OrNull` 后缀的可空版本，以及会抛异常的非 `OrNull` 版本。
+
+</Callout>
+
+## 4. fold 与 reduce
+
+```kotlin
+fun main() {
+    val nums = listOf(1, 2, 3, 4)
+
+    // reduce：用第一个元素做初始值，空集合会抛异常
+    println(nums.reduce { acc, n -> acc + n })
+    println(nums.reduceOrNull { acc, n -> acc * n })
+
+    // fold：自己提供初始值，可以改变结果类型
+    println(nums.fold(0) { acc, n -> acc + n })
+    println(nums.fold("") { acc, n -> "$acc$n" })
+    println(nums.fold(mutableListOf<Int>()) { acc, n -> acc.apply { add(n * 2) } })
+
+    // 从右往左
+    println(nums.foldRight("") { n, acc -> "$acc$n" })
+
+    // 保留每一步的中间结果
+    println(nums.runningFold(0) { acc, n -> acc + n })
+}
+```
+
+| | 初始值 | 结果类型 | 空集合 |
+| --- | --- | --- | --- |
+| `reduce` | 第一个元素 | 和元素同类型 | **抛异常** |
+| `fold` | 你提供 | 任意 | 返回初始值 |
+
+<Callout type="tip">
+
+**优先用 `fold`**：它能处理空集合，而且结果类型自由。
+`reduce` 只在「一定非空且类型不变」时才更简洁。
+
+</Callout>
+
+## 5. 分块
+
+```kotlin
+fun main() {
+    val list = (1..10).toList()
+
+    println(list.chunked(3))                       // 固定大小分块
+    println(list.chunked(3) { it.sum() })          // 分块后立刻处理
+
+    println(list.windowed(3))                      // 滑动窗口
+    println(list.windowed(3, step = 2))
+    println(list.windowed(3, step = 1, partialWindows = true).takeLast(3))
+}
+```
+
+Android 上 `chunked` 常用于**分批请求**：
+
+```kt
+// 一次最多查 50 个 ID
+ids.chunked(50).forEach { batch ->
+    api.fetchByIds(batch)
+}
+```
+
+## 6. Android 实战
+
+```kt
+// 按日期分组显示（聊天记录、订单列表）
+val grouped: Map<LocalDate, List<Message>> = messages
+    .groupBy { it.timestamp.toLocalDate() }
+    .toSortedMap(compareByDescending { it })
+
+// 转成带 header 的扁平列表给 RecyclerView
+val listItems = grouped.flatMap { (date, msgs) ->
+    listOf(ListItem.Header(date)) + msgs.map { ListItem.Content(it) }
+}
+
+// 统计
+val summary = orders.groupingBy { it.status }.eachCount()
+
+// 复杂排序：置顶 → 未读 → 时间倒序
+val sorted = conversations.sortedWith(
+    compareByDescending<Conversation> { it.isPinned }
+        .thenByDescending { it.unreadCount > 0 }
+        .thenByDescending { it.lastMessageTime }
+)
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>maxByOrNull {'{'} it.score {'}'}</code> 和 <code>maxOfOrNull {'{'} it.score {'}'}</code> 的区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    'maxByOrNull 返回分数最高的那个元素，maxOfOrNull 返回最高的那个分数',
+    'maxByOrNull 返回分数，maxOfOrNull 返回元素',
+    'maxOfOrNull 已废弃',
+  ]}
+  answer={1}
+>
+
+- `maxByOrNull { it.score }` → **元素**（`P("a", 90)`）
+- `maxOfOrNull { it.score }` → **值**（`90`）
+
+记忆方式：`By` 是「**按**什么排」，返回的还是元素；`Of` 是「取什么**的**最大值」，
+返回的是那个值。
+
+`OrNull` 后缀表示空集合时返回 null 而不是抛异常。Kotlin 1.4 之后统一了这套命名，
+老代码里的 `maxBy` / `max` 已经废弃。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>sorted()</code> 和 <code>sort()</code> 的区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    'sorted() 返回新集合（任何 Iterable 可用），sort() 原地排序（只有 MutableList 可用）',
+    'sort() 更快',
+    'sorted() 只能升序',
+  ]}
+  answer={1}
+>
+
+Kotlin 有一条一致的命名规律：**带 `ed`/`ing` 的返回新集合，不带的原地修改**。
+
+| 返回新集合 | 原地修改 |
+| --- | --- |
+| `sorted()` / `sortedBy {}` | `sort()` / `sortBy {}` |
+| `reversed()` | `reverse()` |
+| `shuffled()` | `shuffle()` |
+
+原地版本只存在于 `MutableList` 上——只读的 `List` 自然没有它们。
+
+日常优先用返回新集合的版本：不修改输入是更安全的默认行为，
+尤其在把集合放进 StateFlow 之类需要靠 `equals` 判断变化的场景里。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>fold</code> 和 <code>reduce</code> 的关键区别？
+    </>
+  }
+  options={[
+    'fold 更快',
+    'fold 需要提供初始值、结果类型可以不同、空集合安全；reduce 用第一个元素做初始值、空集合抛异常',
+    'reduce 只能用于数字',
+    '没有区别',
+  ]}
+  answer={1}
+>
+
+三个差异：
+
+| | `reduce` | `fold` |
+| --- | --- | --- |
+| 初始值 | 第一个元素 | 你提供 |
+| 结果类型 | 必须和元素同类型 | 任意 |
+| 空集合 | **抛异常** | 返回初始值 |
+
+所以 `fold` 能做 `reduce` 做不到的事，比如把 `List<Int>` 折叠成 `String`：
+
+```
+nums.fold("") { acc, n -> "$acc$n" }
+```
+
+实践建议：**默认用 `fold`**。`reduce` 只在「集合一定非空且结果类型不变」时才更简洁，
+而且还有 `reduceOrNull` 可以处理空集合。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="fill"
+  question="按优先级降序、然后按创建时间升序排序一个 List<Task>，写出 sortedWith 的比较器。"
+  answer={[
+    'compareByDescending<Task> { it.priority }.thenBy { it.createdAt }',
+    'compareByDescending<Task> { it.priority }.thenBy { it.createdAt }',
+  ]}
+>
+
+```
+list.sortedWith(
+    compareByDescending<Task> { it.priority }.thenBy { it.createdAt }
+)
+```
+
+`compareBy` / `compareByDescending` 创建比较器，`thenBy` / `thenByDescending`
+链式追加次级排序条件——比手写 `Comparator` 的匿名类清楚太多。
+
+两个常用补充：
+
+- 全部同向时可以一次传多个：`compareBy({ it.a }, { it.b })`
+- 可空字段用 `nullsFirst(...)` / `nullsLast(...)` 包一层
+
+</Quiz>
 
 ## 官方参考
 
-- 官方中文：[collection-grouping](https://book.kotlincn.net/text/collection-grouping.html)
-- 官方英文：[collection-grouping](https://kotlinlang.org/docs/collection-grouping.html)
+- 官方中文：[collection-grouping](https://book.kotlincn.net/text/collection-grouping.html) ／ [collection-ordering](https://book.kotlincn.net/text/collection-ordering.html)
+- 官方英文：[collection-grouping](https://kotlinlang.org/docs/collection-grouping.html) ／ [collection-aggregate](https://kotlinlang.org/docs/collection-aggregate.html)

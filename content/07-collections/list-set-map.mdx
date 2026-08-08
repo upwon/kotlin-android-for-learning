@@ -1,21 +1,358 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 7.4 List / Set / Map 操作」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+前面几课讲的是所有集合通用的操作，这一课讲各类型**特有**的 API。
+其中 Map 的解构遍历和 `getOrPut` 是最提升日常效率的两个。
+
+## 1. List 特有
+
+```kotlin
+fun main() {
+    val list = listOf("a", "b", "c", "d")
+
+    // 索引访问
+    println(list[1])
+    println(list.getOrNull(10))                 // 越界返回 null，不抛异常
+    println(list.getOrElse(10) { "默认" })
+
+    println(list.first())
+    println(list.last())
+    println(list.firstOrNull { it > "b" })
+    println(list.indexOf("c"))
+    println(list.indices)
+    println(list.lastIndex)
+
+    // 子列表
+    println(list.subList(1, 3))
+    println(list.take(2))
+    println(list.takeLast(2))
+    println(list.drop(2))
+    println(list.dropLast(2))
+    println(list.takeWhile { it < "c" })
+    println(list.dropWhile { it < "c" })
+
+    // 二分查找（要求已排序）
+    println(listOf(1, 3, 5, 7).binarySearch(5))
+}
+```
+
+<Callout type="warn" title="用 getOrNull 代替 [ ]">
+
+`list[10]` 越界会抛 `IndexOutOfBoundsException`。
+在 `RecyclerView.onBindViewHolder` 这类会被并发调用、数据可能正在更新的地方，
+用 `getOrNull(position)` 更稳：
+
+```kt
+override fun onBindViewHolder(holder: VH, position: Int) {
+    val item = items.getOrNull(position) ?: return
+    holder.bind(item)
+}
+```
+
 </Callout>
 
-## 学习提纲
+## 2. Set 特有：集合运算
 
-- List：索引访问、getOrNull、subList、二分查找
-- Set：交并差 intersect / union / subtract
-- Map：遍历、getOrElse、getOrPut、解构 (k, v)
-- 可变集合的原地操作 removeAll / retainAll
+```kotlin
+fun main() {
+    val a = setOf(1, 2, 3, 4)
+    val b = setOf(3, 4, 5)
 
-## 与 Java / Android 的关键差异
+    println(a intersect b)     // 交集 [3, 4]
+    println(a union b)         // 并集 [1, 2, 3, 4, 5]
+    println(a subtract b)      // 差集 [1, 2]
+    println((a subtract b) union (b subtract a))   // 对称差
 
-Map 遍历可以直接解构成 (key, value)，比 entrySet() 干净很多。
+    // List 上也能用这些（内部会转成 Set）
+    println(listOf(1, 2, 2, 3).distinct())
+    println(listOf(1, 2, 3).intersect(listOf(2, 3, 4)))
+}
+```
+
+<Callout type="tip" title="判断包含用 Set 而不是 List">
+
+```kt
+// 😐 List.contains 是 O(n)
+val blocked = listOf("a", "b", ...)  // 1000 个
+if (userId in blocked) { }           // 每次都遍历
+
+// ✅ Set.contains 是 O(1)
+val blocked = setOf("a", "b", ...)
+if (userId in blocked) { }
+```
+
+在循环里做包含判断时，这个差别是 O(n²) 和 O(n) 的区别。
+
+</Callout>
+
+## 3. Map 操作
+
+```kotlin
+fun main() {
+    val map = mapOf("a" to 1, "b" to 2, "c" to 3)
+
+    // 取值
+    println(map["a"])                    // Int?，key 不存在返回 null
+    println(map.getOrElse("z") { 0 })
+    println(map.getValue("a"))           // key 不存在会抛异常
+
+    // 遍历：解构最方便
+    for ((k, v) in map) print("$k=$v ")
+    println()
+    map.forEach { (k, v) -> print("$k:$v ") }
+    println()
+
+    // 视图
+    println(map.keys)
+    println(map.values)
+    println(map.entries.first())
+
+    // 过滤与变换（结果还是 Map）
+    println(map.filter { (_, v) -> v > 1 })
+    println(map.filterKeys { it != "a" })
+    println(map.filterValues { it % 2 == 0 })
+    println(map.mapValues { (_, v) -> v * 10 })
+    println(map.mapKeys { (k, _) -> k.uppercase() })
+
+    // 转换
+    println(map.toList())
+    println(map.entries.associate { (k, v) -> v to k })   // 反转
+
+    // 合并
+    println(map + ("d" to 4))
+    println(map + mapOf("a" to 100))     // 同 key 后者覆盖
+}
+```
+
+<Callout type="java" title="Map 遍历的解构是实打实的提升">
+
+```java
+// Java
+for (Map.Entry<String, Integer> e : map.entrySet()) {
+    System.out.println(e.getKey() + "=" + e.getValue());
+}
+```
+
+```kt
+// Kotlin
+for ((key, value) in map) println("$key=$value")
+```
+
+这背后是 `Map.Entry` 上定义的 `component1()` / `component2()` 扩展函数——
+就是 [5.4 操作符重载](/docs/05-functional/operator-overloading)里的解构约定。
+
+</Callout>
+
+## 4. getOrPut：缓存的标准写法
+
+```kotlin
+fun main() {
+    val cache = mutableMapOf<Int, String>()
+
+    fun expensiveCompute(n: Int): String {
+        println("  计算 $n…")
+        return "结果$n"
+    }
+
+    // 有就取，没有就算了再存
+    println(cache.getOrPut(1) { expensiveCompute(1) })
+    println(cache.getOrPut(1) { expensiveCompute(1) })    // 第二次不计算
+    println(cache)
+}
+```
+
+<Callout type="warn">
+
+`getOrPut` **不是线程安全的**。多线程环境用 `ConcurrentHashMap.computeIfAbsent`，
+或者协程里用 `Mutex` 保护（见
+[8.9 共享状态](/docs/08-coroutines/shared-mutable-state)）。
+
+</Callout>
+
+## 5. 可变集合的原地操作
+
+```kotlin
+fun main() {
+    val list = mutableListOf(1, 2, 3, 4, 5)
+
+    list.removeAll { it % 2 == 0 }       // 按条件删
+    println(list)
+
+    list.retainAll { it > 1 }            // 只保留满足条件的
+    println(list)
+
+    list.replaceAll { it * 10 }
+    println(list)
+
+    val map = mutableMapOf("a" to 1)
+    map["b"] = 2
+    map.putIfAbsent("a", 100)            // 已存在则不覆盖
+    map.remove("a")
+    println(map)
+
+    // += / -= 操作符
+    val l2 = mutableListOf(1)
+    l2 += 2
+    l2 += listOf(3, 4)
+    l2 -= 1
+    println(l2)
+}
+```
+
+<Callout type="warn" title="遍历时修改会抛 ConcurrentModificationException">
+
+```kt
+// ❌ 崩溃
+for (item in list) {
+    if (item.isExpired) list.remove(item)
+}
+
+// ✅ 用 removeAll
+list.removeAll { it.isExpired }
+
+// ✅ 或者用迭代器
+val it = list.iterator()
+while (it.hasNext()) {
+    if (it.next().isExpired) it.remove()
+}
+
+// ✅ 或者生成新集合（推荐）
+val kept = list.filterNot { it.isExpired }
+```
+
+</Callout>
+
+## 6. Android 实战
+
+```kt
+// 快速查找：把 List 转成 Map
+private val itemsById: Map<Long, Item> = items.associateBy { it.id }
+fun findItem(id: Long): Item? = itemsById[id]
+
+// 请求参数拼装
+val params = buildMap {
+    put("page", page.toString())
+    put("size", "20")
+    keyword?.let { put("q", it) }          // 条件性添加
+    if (onlyActive) put("status", "active")
+}
+
+// 多选状态
+private val selectedIds = mutableSetOf<Long>()
+fun toggle(id: Long) {
+    if (!selectedIds.add(id)) selectedIds.remove(id)   // add 返回 false 说明已存在
+}
+
+// 分组显示
+val sections: Map<String, List<Contact>> = contacts
+    .groupBy { it.name.first().uppercase() }
+    .toSortedMap()
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>map["key"]</code> 和 <code>map.getValue("key")</code> 在 key 不存在时分别怎样？
+    </>
+  }
+  options={[
+    '都返回 null',
+    '都抛异常',
+    '前者返回 null，后者抛 NoSuchElementException',
+    '前者抛异常，后者返回 null',
+  ]}
+  answer={2}
+>
+
+- `map["key"]` 返回 `V?`，key 不存在时是 `null`
+- `map.getValue("key")` 返回 `V`（非空），key 不存在时抛 `NoSuchElementException`
+
+`getValue` 的价值是**省掉一次判空**——当你确定 key 一定存在时用它，
+类型上直接拿到非空值。
+
+中间选项是 `getOrElse("key") { 默认值 }`，既不返回可空也不抛异常。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么频繁做包含判断时应该用 <code>Set</code> 而不是 <code>List</code>？
+    </>
+  }
+  options={[
+    'Set 更省内存',
+    'Set.contains 是 O(1)（哈希），List.contains 是 O(n)（线性扫描）',
+    'List 不支持 in 运算符',
+    '没有区别',
+  ]}
+  answer={1}
+>
+
+`Set` 基于哈希，`contains` 平均 O(1)；`List` 只能从头扫，O(n)。
+
+在循环里做判断时，这是 **O(n²) 和 O(n) 的区别**：
+
+```
+// 1000 个 item × 1000 个 blocked = 100 万次比较
+items.filter { it.id in blockedList }
+
+// 1000 次哈希查找
+val blockedSet = blockedList.toSet()
+items.filter { it.id in blockedSet }
+```
+
+规则：**用途是「判断是否包含」就用 Set，用途是「有序展示」才用 List。**
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="遍历 List 的同时删除元素会怎样？正确做法是？"
+  options={[
+    '正常工作',
+    '抛 ConcurrentModificationException；应该用 removeAll {} 或 iterator.remove()，或者用 filterNot 生成新集合',
+    '只会删掉第一个',
+    '需要加 synchronized',
+  ]}
+  answer={1}
+>
+
+for-each 底层用的是迭代器，集合在遍历期间被结构性修改会抛
+`ConcurrentModificationException`（这和 Java 一样）。
+
+三种正确做法，按推荐顺序：
+
+1. **生成新集合**：`val kept = list.filterNot { it.isExpired }` ——
+   不修改输入是更安全的默认
+2. **原地按条件删**：`list.removeAll { it.isExpired }`
+3. **显式迭代器**：`val it = list.iterator(); while (it.hasNext()) { ...; it.remove() }`
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="fill"
+  question="实现一个简单的内存缓存：key 存在就取，不存在就计算后存入。用一个 Map 函数完成。"
+  answer={['cache.getOrPut(key) { compute(key) }', 'getOrPut(key) { compute(key) }']}
+>
+
+`getOrPut(key) { compute(key) }`。
+
+它做三件事：查 key → 不存在就执行 lambda → 把结果存进 map 并返回。
+lambda **只在缺失时才执行**，所以昂贵的计算不会白做。
+
+两点提醒：
+
+- **不是线程安全的**。多线程用 `ConcurrentHashMap.computeIfAbsent`，
+  协程里用 `Mutex` 保护。
+- 如果 lambda 可能返回 null，`getOrPut` 会**每次都重新计算**（因为它用 null 表示缺失）。
+  需要缓存 null 结果时得自己处理。
+
+</Quiz>
 
 ## 官方参考
 
-- 官方中文：[list-operations](https://book.kotlincn.net/text/list-operations.html)
-- 官方英文：[list-operations](https://kotlinlang.org/docs/list-operations.html)
+- 官方中文：[list-operations](https://book.kotlincn.net/text/list-operations.html) ／ [map-operations](https://book.kotlincn.net/text/map-operations.html)
+- 官方英文：[list-operations](https://kotlinlang.org/docs/list-operations.html) ／ [set-operations](https://kotlinlang.org/docs/set-operations.html)

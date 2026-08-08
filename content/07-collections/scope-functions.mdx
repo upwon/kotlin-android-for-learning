@@ -1,20 +1,354 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 7.6 作用域函数 let / run / with / apply / also」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+五个函数（`let`、`run`、`with`、`apply`、`also`）做的事高度重叠，
+所以它们是 Kotlin 里**最容易被滥用**的特性。这一课给一套能落地的选择依据。
+
+## 1. 两个维度决定一切
+
+| 函数 | 接收者形式 | 返回值 |
+| --- | --- | --- |
+| `let` | `it`（参数） | lambda 结果 |
+| `run` | `this`（隐式） | lambda 结果 |
+| `with` | `this`（隐式） | lambda 结果 |
+| `apply` | `this`（隐式） | **接收者本身** |
+| `also` | `it`（参数） | **接收者本身** |
+
+<Callout type="success" title="记忆口诀">
+
+- 名字里带 **`a`**（**a**pply、**a**lso）→ 返回**接收者自己**（可以继续链式）
+- 名字里带 **`t`**（le**t**、also 的 i**t**）→ 用 **`it`** 访问
+
+再加一条：**`with` 不是扩展函数**，它把接收者当第一个参数传，
+所以不能用在可空对象上。
+
 </Callout>
 
-## 学习提纲
+```kotlin
+data class Config(var host: String = "", var port: Int = 0)
 
-- 两个维度：接收者是 it 还是 this、返回值是自身还是 lambda 结果
-- 五个函数的选择决策表
-- 典型场景：?.let 空安全、apply 配置对象、also 副作用
-- 嵌套滥用导致的可读性灾难
-- takeIf / takeUnless
+fun main() {
+    val c = Config()
 
-## 与 Java / Android 的关键差异
+    // apply：配置对象，返回对象 → 最常用
+    val configured = c.apply {
+        host = "api.example.com"    // this.host
+        port = 443
+    }
+    println(configured)
 
-Java 没有对应物；用好它能显著减少中间变量。
+    // also：副作用（日志、校验），返回对象
+    val checked = configured.also {
+        println("配置完成：${it.host}")
+    }
+
+    // let：转换，返回新值
+    val url: String = checked.let { "https://${it.host}:${it.port}" }
+    println(url)
+
+    // run：配置 + 返回新值（apply 和 let 的结合）
+    val desc: String = c.run { "$host:$port" }
+    println(desc)
+
+    // with：多次操作同一对象，非扩展函数
+    val info = with(c) { "host=$host, port=$port" }
+    println(info)
+}
+```
+
+## 2. 决策表
+
+<Callout type="tip" title="按「你想做什么」来选">
+
+| 我想… | 用 | 例子 |
+| --- | --- | --- |
+| 创建对象后配置它 | `apply` | `Intent().apply { putExtra(...) }` |
+| 对可空对象非空时做事 | `?.let` | `user?.let { save(it) }` |
+| 把对象转换成另一个值 | `let` / `run` | `str.let { it.length }` |
+| 在链中插入副作用（日志） | `also` | `.also { Log.d(TAG, "$it") }` |
+| 对一个对象调用多个方法 | `with` | `with(canvas) { drawLine(); drawText() }` |
+| 需要一段代码的返回值 | `run` | `val x = run { ...; result }` |
+
+</Callout>
+
+## 3. 最高频的三个用法
+
+```kotlin
+data class User(val name: String, val email: String?)
+
+fun main() {
+    // 1. ?.let —— 空安全 + 需要一个非空的局部变量
+    val user: User? = User("Summer", "s@a.com")
+    user?.email?.let { email ->
+        println("发送邮件到 $email，长度 ${email.length}")
+    }
+
+    // 2. apply —— 配置对象
+    val sb = StringBuilder().apply {
+        append("Hello")
+        append(", ")
+        append("World")
+    }
+    println(sb)
+
+    // 3. also —— 链中插日志，不打断链
+    val result = listOf(1, 2, 3)
+        .also { println("原始：$it") }
+        .map { it * 2 }
+        .also { println("翻倍：$it") }
+        .filter { it > 2 }
+    println(result)
+}
+```
+
+Android 上的对应：
+
+```kt
+// apply 配置
+val intent = Intent(this, DetailActivity::class.java).apply {
+    putExtra("id", id)
+    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP
+}
+
+val fragment = MyFragment().apply {
+    arguments = bundleOf("id" to id)
+}
+
+// ?.let 空安全
+arguments?.getString("id")?.let { loadDetail(it) }
+
+// with 批量操作
+with(binding) {
+    title.text = user.name
+    subtitle.text = user.email
+    avatar.load(user.avatarUrl)
+}
+
+// also 副作用
+repository.getUser(id)
+    .also { analytics.track("user_loaded", it.id) }
+    .let { it.toUiModel() }
+```
+
+## 4. takeIf 与 takeUnless
+
+```kotlin
+fun main() {
+    val input = "  hello  "
+
+    // takeIf：条件成立返回自己，否则返回 null
+    println(input.trim().takeIf { it.isNotEmpty() } ?: "（空）")
+    println("".takeIf { it.isNotEmpty() } ?: "（空）")
+
+    // takeUnless：反过来
+    val n = -5
+    println(n.takeUnless { it < 0 } ?: 0)
+
+    // 常见组合：过滤 + 非空执行
+    val name: String? = "Summer"
+    name?.takeIf { it.length > 3 }?.let { println("长名字：$it") }
+}
+```
+
+<Callout type="warn">
+
+`takeIf` 返回可空类型，所以后面几乎总要跟 `?:` 或 `?.let`。
+只用一次判断的话，普通 `if` 更清楚：
+
+```kt
+// 😐
+val x = value.takeIf { it > 0 } ?: 0
+
+// ✅ 同样清楚，少一层
+val x = if (value > 0) value else 0
+```
+
+`takeIf` 的价值在**链式调用中间**——那里没法插 `if`。
+
+</Callout>
+
+## 5. 反模式
+
+<Callout type="warn" title="① 嵌套两层带接收者的作用域函数">
+
+```kt
+// ❌ 两层 this，读的人根本分不清
+outer.apply {
+    inner.apply {
+        name = "x"       // 这是 inner 的还是 outer 的？
+    }
+}
+
+// ✅ 至少一层用 also/let 并命名
+outer.apply {
+    inner.also { i -> i.name = "x" }
+}
+```
+
+见 [6.3 this 表达式](/docs/06-null-safety/this-expressions)。
+
+</Callout>
+
+<Callout type="warn" title="② 为了「函数式」而用 let">
+
+```kt
+// ❌ 无意义的包装
+val length = str.let { it.length }
+// ✅
+val length = str.length
+
+// ❌ let 当 if 用
+user?.let { if (it.isVip) showBadge() }
+// ✅
+if (user != null && user.isVip) showBadge()
+```
+
+</Callout>
+
+<Callout type="warn" title="③ 用 apply 做和配置无关的事">
+
+```kt
+// ❌ apply 的语义是「配置这个对象」，不是「顺便干点别的」
+val user = getUser().apply {
+    analytics.track("loaded")     // 和 user 没关系
+    updateCache()
+}
+
+// ✅ 副作用用 also，意图清楚
+val user = getUser().also {
+    analytics.track("loaded")
+    updateCache()
+}
+```
+
+</Callout>
+
+<Callout type="warn" title="④ 长链里滥用 also 打日志">
+
+```kt
+// ❌ 每步都插一个 also，主流程被日志淹没
+data.also { log(it) }.filter { }.also { log(it) }.map { }.also { log(it) }
+```
+
+调试时临时加没问题，别提交进主干。
+
+</Callout>
+
+## 6. 一张选择流程图
+
+```
+需要返回接收者本身（继续链式）？
+├─ 是 → 是在「配置对象」吗？
+│        ├─ 是 → apply
+│        └─ 否（副作用/日志）→ also
+└─ 否（要 lambda 的结果）→ 接收者可空吗？
+         ├─ 是 → ?.let
+         └─ 否 → 想用 this 还是 it？
+                  ├─ this + 对象是表达式 → run
+                  ├─ this + 对象是已有变量 → with
+                  └─ it → let
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question="apply 和 also 的区别是什么？"
+  options={[
+    '没有区别',
+    'apply 用 this 访问接收者（适合配置对象），also 用 it（适合副作用）；两者都返回接收者本身',
+    'apply 返回接收者，also 返回 lambda 结果',
+    'also 只能用于可空对象',
+  ]}
+  answer={1}
+>
+
+两者的**返回值相同**（都是接收者本身），区别只在**怎么访问接收者**：
+
+- `apply { host = "x" }` —— `this` 隐式，直接写属性名 → 适合**配置对象**
+- `also { log(it) }` —— `it` 显式 → 适合**副作用**（日志、校验、埋点）
+
+这个区别不只是语法偏好，还是**意图声明**：看到 `apply` 就知道在配置这个对象，
+看到 `also` 就知道在做和对象本身无关的事。
+
+反过来说，用 `apply` 做埋点、用 `also` 配置属性，都会误导读代码的人。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>with</code> 和 <code>run</code> 的区别是什么？
+    </>
+  }
+  options={[
+    '没有区别',
+    'with 不是扩展函数（接收者作为参数传入），所以不能用在可空对象上；run 是扩展函数，可以写 obj?.run {}',
+    'with 返回接收者，run 返回 lambda 结果',
+    'run 不能用 this',
+  ]}
+  answer={1}
+>
+
+两者都用 `this` 访问接收者、都返回 lambda 结果，唯一区别是**调用形式**：
+
+- `with(obj) { ... }` —— 普通函数，obj 是参数。**不能用在可空对象上**。
+- `obj.run { ... }` —— 扩展函数，所以可以 `obj?.run { ... }`。
+
+实践中的选择：
+
+- 对象是**已有变量**、要连续调它的多个方法 → `with(binding) { ... }`
+- 对象是**表达式**或**可空** → `getConfig().run { ... }` / `obj?.run { ... }`
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="下面哪种写法更好？"
+  options={[
+    'val length = str.let { it.length }',
+    'val length = str.length',
+    '两者等价，随便选',
+    'val length = str.run { length }',
+  ]}
+  answer={1}
+>
+
+`str.length` —— 直接访问。
+
+`let` 的价值在于「**需要一个非空的局部变量**」（`?.let`）或者
+「**在链式调用中间做转换**」。这里两个条件都不满足，包一层 `let`
+只是增加了阅读成本。
+
+这是最常见的过度使用：把作用域函数当成「Kotlin 味」的标志，
+而不是解决具体问题的工具。
+
+判断标准很简单：**去掉这个作用域函数，代码会变差吗？** 不会就别用。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些是作用域函数的合理用法？"
+  options={[
+    'Intent(...).apply { putExtra("id", id) }',
+    'user?.let { saveToDatabase(it) }',
+    'outer.apply { inner.apply { name = "x" } }',
+    'repository.load().also { analytics.track(it.id) }',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+- **A**：`apply` 配置对象并返回它，正好接给 `startActivity`——教科书用法。
+- **B**：`?.let` 处理可空 + 需要一个非空的 `it` 传给函数——最核心的用法。
+- **D**：`also` 在链中插入副作用（埋点），不打断链——正是它的设计目的。
+
+**C 是反模式**：两层 `apply` 意味着两层隐式 `this`，`name = "x"` 到底改的是
+`inner` 还是 `outer` 只能靠猜。而且两层的标签都是 `@apply`，
+连 `this@apply` 都区分不了。
+
+需要嵌套时，至少让一层用 `also`/`let` 把接收者变成有名字的参数。
+
+</Quiz>
 
 ## 官方参考
 

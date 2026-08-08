@@ -1,19 +1,332 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 7.2 转换 / 过滤 / 映射」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一课是日常写得最多的一组函数。和 Java Stream 的最大区别：
+**Kotlin 的集合扩展函数直接挂在集合上**，不需要 `stream()` 开头、`collect()` 结尾。
+
+## 1. map 家族
+
+```kotlin
+data class User(val name: String, val age: Int, val email: String?)
+
+fun main() {
+    val users = listOf(
+        User("Summer", 28, "s@a.com"),
+        User("Xia", 35, null),
+        User("Aki", 22, "a@a.com"),
+    )
+
+    println(users.map { it.name })
+    println(users.mapIndexed { i, u -> "${i + 1}. ${u.name}" })
+
+    // mapNotNull：映射并丢掉 null 结果
+    println(users.mapNotNull { it.email })
+
+    // map 之后再 filterNotNull 是同一效果，但 mapNotNull 一步到位
+    println(users.map { it.email }.filterNotNull())
+}
+```
+
+## 2. filter 家族
+
+```kotlin
+fun main() {
+    val list = listOf(1, 2, 3, 4, 5, 6)
+
+    println(list.filter { it % 2 == 0 })
+    println(list.filterNot { it % 2 == 0 })
+    println(list.filterIndexed { i, _ -> i < 3 })
+
+    val mixed: List<Any> = listOf(1, "a", 2.0, "b")
+    println(mixed.filterIsInstance<String>())      // 类型过滤，返回 List<String>
+
+    val nullable = listOf("a", null, "b")
+    println(nullable.filterNotNull())
+
+    // partition：一次遍历分成两组
+    val (even, odd) = list.partition { it % 2 == 0 }
+    println("偶数 $even，奇数 $odd")
+}
+```
+
+<Callout type="tip">
+
+`partition` 比写两次 `filter` 好——只遍历一次，而且用解构接收，
+意图很明确。
+
 </Callout>
 
-## 学习提纲
+## 3. flatMap：打平嵌套
 
-- map / mapNotNull / mapIndexed
-- filter / filterNotNull / filterIsInstance
-- flatMap / zip / associate
-- 每一步都会产生新集合的代价
+```kotlin
+data class Order(val id: Int, val items: List<String>)
 
-## 与 Java / Android 的关键差异
+fun main() {
+    val orders = listOf(
+        Order(1, listOf("苹果", "香蕉")),
+        Order(2, listOf("橘子")),
+        Order(3, emptyList()),
+    )
 
-不需要 stream()/collect()，集合上直接就有这些扩展函数。
+    // map 得到 List<List<String>>
+    println(orders.map { it.items })
+
+    // flatMap 打平成 List<String>
+    println(orders.flatMap { it.items })
+
+    // flatten：已经是嵌套集合时直接打平
+    println(listOf(listOf(1, 2), listOf(3)).flatten())
+
+    // 组合：所有商品去重排序
+    println(orders.flatMap { it.items }.distinct().sorted())
+}
+```
+
+## 4. zip 与 unzip
+
+```kotlin
+fun main() {
+    val names = listOf("Summer", "Xia", "Aki")
+    val ages = listOf(28, 35)
+
+    // 长度不等时按短的截断
+    println(names.zip(ages))
+    println(names.zip(ages) { n, a -> "$n($a)" })
+
+    val pairs = listOf("a" to 1, "b" to 2)
+    val (letters, numbers) = pairs.unzip()
+    println("$letters $numbers")
+
+    // zipWithNext：相邻元素配对
+    println(listOf(1, 3, 6, 10).zipWithNext { a, b -> b - a })
+}
+```
+
+## 5. associate 家族：转成 Map
+
+```kotlin
+data class Product(val id: Int, val name: String, val price: Int)
+
+fun main() {
+    val products = listOf(
+        Product(1, "键盘", 299),
+        Product(2, "鼠标", 99),
+        Product(3, "屏幕", 1299),
+    )
+
+    // associateBy：用某个字段做 key（最常用）
+    val byId = products.associateBy { it.id }
+    println(byId[2]?.name)
+
+    // associateWith：用元素做 key，lambda 结果做 value
+    println(listOf("a", "bb").associateWith { it.length })
+
+    // associate：自己决定 key 和 value
+    println(products.associate { it.name to it.price })
+}
+```
+
+<Callout type="warn" title="associateBy 遇到重复 key 会静默覆盖">
+
+```kotlin
+fun main() {
+    val list = listOf("apple", "avocado", "banana")
+    println(list.associateBy { it.first() })    // {a=avocado, b=banana}
+    //                                            ↑ apple 被覆盖了
+
+    // 需要保留全部时用 groupBy
+    println(list.groupBy { it.first() })         // {a=[apple, avocado], b=[banana]}
+}
+```
+
+`associateBy` 后面的元素会覆盖前面的同 key 元素，不会报错。
+Android 上用它把列表转成 `Map<Id, Item>` 做快速查找时，
+要确认 key 确实唯一。
+
+</Callout>
+
+## 6. 惰性 vs 立即：每一步都产生新集合
+
+```kotlin
+fun main() {
+    val result = (1..10).toList()
+        .filter { println("filter $it"); it % 2 == 0 }
+        .map { println("map $it"); it * 10 }
+        .take(2)
+
+    println(result)
+    println("注意：filter 和 map 都跑完了全部 10 个元素")
+}
+```
+
+<Callout type="warn">
+
+集合上的 `map`/`filter` 是**立即求值**的：每一步都完整遍历并生成一个新的中间集合。
+
+`listOf(...).filter{}.map{}.take(2)` 会：遍历 10 次 filter → 生成中间 List →
+遍历 5 次 map → 生成中间 List → 取前 2 个。
+
+数据量大或者链很长时，改用 `asSequence()` 变成惰性求值（见
+[7.5 序列](/docs/07-collections/sequences)）。
+
+但请注意：**小集合上 Sequence 反而更慢**（多了迭代器的开销）。
+几十到几百个元素的日常场景，直接用集合操作就好。
+
+</Callout>
+
+## 7. Android 实战
+
+```kt
+// DTO → 领域模型 → UI 模型
+val uiItems = response.data
+    .filter { it.status == "active" }
+    .mapNotNull { dto -> dto.toDomainOrNull() }
+    .map { it.toUiModel() }
+    .sortedByDescending { it.updatedAt }
+
+// 权限检查
+val missing = requiredPermissions.filterNot { permission ->
+    ContextCompat.checkSelfPermission(this, permission) == PERMISSION_GRANTED
+}
+if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), CODE)
+
+// 把列表转成快速查找的 Map
+private val itemsById = items.associateBy { it.id }
+
+// 多层数据打平
+val allComments = posts.flatMap { it.comments }
+```
+
+<Callout type="tip" title="链式调用的可读性边界">
+
+超过 4~5 步的链，可读性会急剧下降。这时候：
+
+```kt
+// 😐 一条长链
+val result = data.filter { ... }.map { ... }.filter { ... }
+    .sortedBy { ... }.groupBy { ... }.mapValues { ... }.toList()
+
+// ✅ 拆成有名字的中间步骤
+val active = data.filter { it.isActive }
+val models = active.map { it.toModel() }
+val grouped = models.groupBy { it.category }
+```
+
+变量名本身就是文档。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>orders.map {'{'} it.items {'}'}</code> 和 <code>orders.flatMap {'{'} it.items {'}'}</code> 的返回类型分别是？
+    </>
+  }
+  options={[
+    '都是 List<String>',
+    'map 返回 List<List<String>>，flatMap 返回 List<String>',
+    'map 返回 List<String>，flatMap 返回 List<List<String>>',
+    '都是 List<List<String>>',
+  ]}
+  answer={1}
+>
+
+`map` 是一对一映射：每个 `Order` 变成一个 `List<String>`，结果是嵌套的
+`List<List<String>>`。
+
+`flatMap` 是「映射 + 打平」：每个元素映射成一个集合，然后把所有集合拼接起来，
+结果是 `List<String>`。
+
+如果数据已经是嵌套集合（不需要映射），直接用 `flatten()`：
+
+```
+listOf(listOf(1, 2), listOf(3)).flatten()    // [1, 2, 3]
+```
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>associateBy</code> 遇到重复的 key 会怎样？
+    </>
+  }
+  options={[
+    '抛异常',
+    '静默覆盖，后面的元素替换前面的',
+    '保留第一个',
+    '把值组成 List',
+  ]}
+  answer={1}
+>
+
+**静默覆盖**，不报错也不警告——这是它最容易出问题的地方。
+
+```
+listOf("apple", "avocado").associateBy { it.first() }   // {a=avocado}，apple 丢了
+```
+
+需要保留全部同 key 元素时用 `groupBy`，它的 value 是 `List`：
+
+```
+listOf("apple", "avocado").groupBy { it.first() }       // {a=[apple, avocado]}
+```
+
+实践中用 `associateBy` 把列表转成 `Map<Id, Item>` 时，先确认 key 真的唯一。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>list.filter {'{'} ... {'}'}.map {'{'} ... {'}'}.take(2)</code> 在普通集合上会遍历几次？
+    </>
+  }
+  options={[
+    '只遍历到取够 2 个为止',
+    '完整遍历 filter，生成中间集合；再完整遍历 map，生成中间集合；最后取 2 个',
+    '只遍历一次',
+    '取决于集合大小',
+  ]}
+  answer={1}
+>
+
+集合上的操作是**立即求值**的：每一步都完整跑完并生成一个新的中间集合。
+
+`take(2)` 是最后才执行的，前面的 `filter` 和 `map` 已经把所有元素都处理过了。
+
+想要「按需计算、取够就停」的行为，用 `asSequence()` 转成惰性序列：
+
+```
+list.asSequence().filter { }.map { }.take(2).toList()
+```
+
+但注意：**小集合上 Sequence 反而更慢**（迭代器开销大于省下的遍历）。
+几十到几百个元素的日常场景，直接用集合操作就好。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="fill"
+  question="从 List<User> 中取出所有非空的 email，用一个函数完成。"
+  answer={['users.mapNotNull { it.email }', 'mapNotNull { it.email }']}
+>
+
+`mapNotNull { it.email }`——映射的同时丢掉 null 结果。
+
+等价的两步写法是 `map { it.email }.filterNotNull()`，但那会多生成一个中间集合，
+而且意图不如 `mapNotNull` 直白。
+
+同族的还有：
+
+- `filterIsInstance<T>()` —— 按类型筛选，返回 `List<T>`
+- `filterNotNull()` —— 已经是 `List<T?>` 时直接去 null
+- `listOfNotNull(a, b, c)` —— 构造时就过滤 null
+
+</Quiz>
 
 ## 官方参考
 

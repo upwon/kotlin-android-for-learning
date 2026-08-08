@@ -587,6 +587,7 @@ const parts = [
         ],
         javaNote: 'Java 只有一套接口 + UnsupportedOperationException；Kotlin 在类型层面区分读写。',
         official: 'collections-overview',
+        deep: true,
       },
       {
         num: '7.2',
@@ -601,6 +602,7 @@ const parts = [
         ],
         javaNote: '不需要 stream()/collect()，集合上直接就有这些扩展函数。',
         official: 'collection-transformations',
+        deep: true,
       },
       {
         num: '7.3',
@@ -615,6 +617,7 @@ const parts = [
         ],
         javaNote: 'Collectors.groupingBy 的等价物更短，比较器用 compareBy 组合。',
         official: 'collection-grouping',
+        deep: true,
       },
       {
         num: '7.4',
@@ -629,6 +632,7 @@ const parts = [
         ],
         javaNote: 'Map 遍历可以直接解构成 (key, value)，比 entrySet() 干净很多。',
         official: 'list-operations',
+        deep: true,
       },
       {
         num: '7.5',
@@ -643,6 +647,7 @@ const parts = [
         ],
         javaNote: 'Sequence 对应 Stream，但小集合上直接用 List 操作通常更快。',
         official: 'sequences',
+        deep: true,
       },
       {
         num: '7.6',
@@ -659,6 +664,7 @@ const parts = [
         javaNote: 'Java 没有对应物；用好它能显著减少中间变量。',
         official: 'scope-functions',
         star: true,
+        deep: true,
       },
     ],
   },

@@ -1,19 +1,303 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 7.5 序列 Sequence」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+`Sequence` 对应 Java 的 `Stream`：**惰性求值**。
+但这一课最重要的结论可能和你预期相反——**大多数 Android 场景下，你不该用它**。
+
+## 1. 立即 vs 惰性
+
+```kotlin
+fun main() {
+    println("=== 集合（立即求值）===")
+    val a = listOf(1, 2, 3, 4, 5)
+        .filter { println("filter $it"); it % 2 == 1 }
+        .map { println("map $it"); it * 10 }
+        .first()
+    println("结果 $a")
+
+    println()
+    println("=== 序列（惰性求值）===")
+    val b = listOf(1, 2, 3, 4, 5)
+        .asSequence()
+        .filter { println("filter $it"); it % 2 == 1 }
+        .map { println("map $it"); it * 10 }
+        .first()
+    println("结果 $b")
+}
+```
+
+集合版本：先 filter 完 5 个元素生成中间 List，再 map 完 3 个，最后取第一个。
+序列版本：**每个元素走完整条链**，第一个元素满足条件就停——总共只处理了 1 个元素。
+
+<Callout type="tip" title="两种求值顺序">
+
+- **集合**：横向逐层——`filter` 全部 → `map` 全部 → 取值
+- **序列**：纵向逐个——元素1 走完 filter+map → 元素2 走完 → …直到满足终止条件
+
 </Callout>
 
-## 学习提纲
+## 2. 中间操作与末端操作
 
-- asSequence() 与惰性求值
-- 中间操作 vs 末端操作
-- 什么时候 Sequence 才真的更快
-- 与 Flow 的关系与区别
+```kotlin
+fun main() {
+    val seq = (1..100).asSequence()
+        .map { println("map $it"); it * 2 }      // 中间操作，不执行
 
-## 与 Java / Android 的关键差异
+    println("到这里什么都没发生")
 
-Sequence 对应 Stream，但小集合上直接用 List 操作通常更快。
+    val result = seq.take(3).toList()            // 末端操作，触发执行
+    println(result)
+}
+```
+
+| 类型 | 例子 | 行为 |
+| --- | --- | --- |
+| **中间操作** | `map`、`filter`、`take`、`sorted`、`distinct` | 返回新 Sequence，不求值 |
+| **末端操作** | `toList`、`first`、`sum`、`count`、`forEach`、`any` | 触发整条链求值 |
+
+<Callout type="warn" title="忘记末端操作 = 什么都没发生">
+
+```kt
+// ❌ 这行代码什么也不做
+items.asSequence().map { save(it) }
+
+// ✅ 需要末端操作
+items.asSequence().map { save(it) }.toList()
+// 或者干脆别用 sequence
+items.forEach { save(it) }
+```
+
+有副作用的操作用 Sequence 特别容易踩这个坑。**Sequence 应该用于纯变换，
+不要在里面做副作用。**
+
+</Callout>
+
+## 3. 什么时候 Sequence 真的更快
+
+```kotlin
+fun main() {
+    val big = (1..1_000_000).toList()
+
+    val t1 = System.currentTimeMillis()
+    val r1 = big.filter { it % 3 == 0 }.map { it * 2 }.take(10)
+    val d1 = System.currentTimeMillis() - t1
+
+    val t2 = System.currentTimeMillis()
+    val r2 = big.asSequence().filter { it % 3 == 0 }.map { it * 2 }.take(10).toList()
+    val d2 = System.currentTimeMillis() - t2
+
+    println("集合：${d1}ms  序列：${d2}ms")
+    println("结果相同：${r1 == r2}")
+}
+```
+
+<Callout type="success" title="用 Sequence 的三个条件">
+
+1. **数据量大**（几千以上）
+2. **操作链长**（3 步以上）
+3. **有提前终止**（`first`、`take`、`any`、`find`）——这是收益最大的一条
+
+三条同时满足才值得。少一条，收益就可能被迭代器的开销吃掉。
+
+</Callout>
+
+<Callout type="warn" title="小集合上 Sequence 更慢">
+
+```kt
+// 😐 30 个元素，Sequence 的迭代器开销 > 省下的遍历
+list.asSequence().filter { }.map { }.toList()
+
+// ✅ 直接用集合
+list.filter { }.map { }
+```
+
+Android 上的列表数据通常是几十到几百条，**直接用集合操作就好**。
+盲目 `asSequence()` 是常见的过度优化。
+
+</Callout>
+
+## 4. sorted 会打破惰性
+
+```kotlin
+fun main() {
+    val result = (1..10).asSequence()
+        .map { println("map $it"); it }
+        .sorted()                    // ← 这里必须把全部元素都算出来
+        .take(2)
+        .toList()
+    println(result)
+}
+```
+
+`sorted`、`distinct`、`groupBy` 这类**有状态**的中间操作，
+必须先看到所有元素才能产出结果——它们会让惰性优势消失。
+
+链里有 `sorted` 时，Sequence 基本就没意义了。
+
+## 5. 生成无限序列
+
+这是 Sequence 相对集合的独有能力：
+
+```kotlin
+fun main() {
+    // generateSequence：从种子开始不断迭代
+    val powers = generateSequence(1) { it * 2 }
+    println(powers.take(10).toList())
+
+    // 斐波那契
+    val fib = generateSequence(0 to 1) { (a, b) -> b to (a + b) }.map { it.first }
+    println(fib.take(10).toList())
+
+    // 返回 null 时终止
+    var count = 0
+    val limited = generateSequence { if (count < 5) count++ else null }
+    println(limited.toList())
+
+    // sequence { } + yield：自己控制产出
+    val custom = sequence {
+        yield(1)
+        yieldAll(listOf(2, 3))
+        yield(4)
+    }
+    println(custom.toList())
+}
+```
+
+Android 上 `generateSequence` 的一个实用场景是**遍历 View 树**：
+
+```kt
+// 向上遍历所有父 View
+fun View.parents(): Sequence<ViewParent> =
+    generateSequence(parent) { it.parent }
+
+// 找到某个类型的祖先
+inline fun <reified T> View.findParentOfType(): T? =
+    parents().filterIsInstance<T>().firstOrNull()
+```
+
+## 6. Sequence vs Flow
+
+| | `Sequence` | `Flow` |
+| --- | --- | --- |
+| 同步/异步 | **同步**，阻塞当前线程 | **异步**，可挂起 |
+| 能否 suspend | ❌ | ✅ |
+| 适用 | CPU 密集的惰性计算 | 异步数据流、网络、数据库 |
+| 取消 | 无 | 跟随协程作用域 |
+
+<Callout type="warn">
+
+**需要 I/O 或异步就用 Flow，不要用 Sequence。** Sequence 的操作符里
+不能调用挂起函数，硬用会把你逼回阻塞式写法。
+
+Flow 见 [8.6 异步流](/docs/08-coroutines/flow)。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>list.asSequence().map {'{'} save(it) {'}'}</code> 会发生什么？
+    </>
+  }
+  options={[
+    '所有元素都会被 save',
+    '什么都不会发生，map 是中间操作，没有末端操作就不求值',
+    '只 save 第一个',
+    '编译错误',
+  ]}
+  answer={1}
+>
+
+**什么都不会发生**。`map` 是中间操作，只是构建了一条待执行的链；
+没有末端操作（`toList`、`forEach`、`sum`…）就不会触发求值。
+
+这是 Sequence 最容易踩的坑，尤其在 lambda 里有副作用时——
+代码看起来跑了，实际一行都没执行。
+
+两条建议：
+
+- **Sequence 只用于纯变换**，不要在中间操作里做副作用
+- 有副作用的遍历直接用 `forEach`，别套 Sequence
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="什么情况下 Sequence 比直接用集合操作更快？"
+  options={[
+    '任何情况',
+    '数据量大 + 操作链长 + 有提前终止（take/first/any），三者同时满足',
+    '数据量小的时候',
+    '只有并行处理时',
+  ]}
+  answer={1}
+>
+
+三个条件要同时满足：
+
+1. **数据量大**（几千以上）——否则迭代器开销盖过收益
+2. **操作链长**（3 步以上）——否则中间集合本来就少
+3. **有提前终止**——这是收益最大的一条，`take(10)` 能让百万级数据只处理十几个
+
+Android 的列表数据通常几十到几百条，**直接用集合操作反而更快**。
+盲目 `asSequence()` 是很常见的过度优化。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      在 Sequence 链里加一个 <code>sorted()</code>，惰性还成立吗？
+    </>
+  }
+  options={[
+    '成立',
+    '不成立，sorted 是有状态操作，必须先看到全部元素',
+    '取决于数据量',
+    'Sequence 不支持 sorted',
+  ]}
+  answer={1}
+>
+
+不成立。`sorted`、`distinct`、`groupBy` 这类**有状态**的中间操作，
+必须收集完所有元素才能产出第一个结果——惰性优势在这一步彻底消失。
+
+所以链里有 `sorted` 时，`asSequence()` 基本没意义，
+反而多了一层迭代器开销。
+
+无状态操作（`map`、`filter`、`take`）才能保持逐元素流动。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="需要从数据库异步读取并变换数据流，该用 Sequence 还是 Flow？"
+  options={[
+    'Sequence，它是惰性的',
+    'Flow，因为它支持挂起函数、可取消，专为异步设计',
+    '都可以',
+    'Sequence，因为更快',
+  ]}
+  answer={1}
+>
+
+**Flow**。两者都是惰性的，但适用领域完全不同：
+
+| | Sequence | Flow |
+| --- | --- | --- |
+| 同步/异步 | 同步，阻塞线程 | 异步，可挂起 |
+| 能调 suspend 函数 | ❌ | ✅ |
+| 取消 | 无 | 跟随协程作用域 |
+| 场景 | CPU 密集的惰性计算 | I/O、网络、数据库、UI 事件 |
+
+Sequence 的操作符里**不能调用挂起函数**——硬用只会把你逼回阻塞式写法，
+在 Android 上就是主线程卡死。
+
+Room 的 `Flow<List<T>>` 返回值就是标准做法，见
+[8.6 异步流](/docs/08-coroutines/flow)。
+
+</Quiz>
 
 ## 官方参考
 
