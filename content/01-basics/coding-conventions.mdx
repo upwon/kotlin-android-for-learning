@@ -1,19 +1,264 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 1.5 编码规范」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一课不复述完整的官方规范（那个查文档就行），只挑**团队协作里真正会吵架的几条**，
+以及在 Android 工程里怎么把它们自动化落地。
+
+## 1. 命名
+
+和 Java 基本一致，三个 Kotlin 特有的点：
+
+| 对象 | 规则 | 例子 |
+| --- | --- | --- |
+| 包名 | 全小写，不用下划线 | `com.example.app.util` |
+| 类 / 接口 | 大驼峰 | `UserRepository` |
+| 函数 / 属性 | 小驼峰 | `loadUser`、`isVisible` |
+| 编译期常量 | 全大写下划线 | `const val MAX_COUNT = 10` |
+| 顶层只读属性（非 const） | **小驼峰** | `val defaultConfig = Config()` |
+| 测试方法 | 允许反引号包裹的自然语言 | `` fun `登录失败时应显示错误提示`() `` |
+
+<Callout type="warn" title="不是所有 val 都写成大写">
+
+Java 里 `static final` 一律大写，很多人把这个习惯带过来，给所有 `val` 都写成 `MAX_SIZE`。
+Kotlin 的规则更细：
+
+```kt
+const val MAX_COUNT = 10                  // ✅ 编译期常量，全大写
+val DEFAULT_CONFIG = Config()             // ❌ 不是编译期常量
+val defaultConfig = Config()              // ✅ 小驼峰
+```
+
+分界线是**能不能内联成字面量**：`const val` 只能修饰基本类型和 String，
+它在编译期就被替换掉了，语义上等同于 Java 的 `static final` 常量，所以大写。
+其他 `val` 只是「不可重新赋值的属性」，按普通属性命名。
+
 </Callout>
 
-## 学习提纲
+反引号命名在 Android 测试里非常值得用：
 
-- 命名与文件组织
-- 格式化与 ktlint / detekt
-- 表达式体 vs 块体的取舍
-- Android 项目里的实践建议
+```kt
+class LoginViewModelTest {
+    @Test
+    fun `密码为空时不应发起网络请求`() { /* ... */ }
+}
+```
 
-## 与 Java / Android 的关键差异
+<Callout type="warn">
 
-官方规范比 Java 更强调「短、表达式化」。
+反引号命名**只用在测试里**。Android 的 instrumented test（跑在设备上的）
+对方法名里的空格和中文有兼容性问题，只有 JVM 单元测试可以放心用。
+
+</Callout>
+
+## 2. 格式：几条会吵架的
+
+**缩进 4 空格，不用 tab。** 行宽官方是 120，Android 生态普遍用 100 或 120，
+选一个写进配置就行，别靠人肉对齐。
+
+**函数参数换行时，每个参数一行，并保留尾逗号：**
+
+```kt
+fun createUser(
+    name: String,
+    email: String,
+    isAdmin: Boolean = false,
+): User { /* ... */ }
+```
+
+尾逗号（trailing comma）是 Kotlin 1.4 引入的，官方推荐开启。好处很实在：
+**增删参数时 diff 只有一行**，不会因为要给上一行补逗号而污染 blame。
+
+**表达式体 vs 块体**——这条最容易吵：
+
+```kt
+// ✅ 简单表达式用 =
+fun isValid() = name.isNotBlank() && age > 0
+
+// ❌ 别为了用 = 而把复杂逻辑挤成一坨
+fun summary() = "${user.name} " + if (user.isVip) "(VIP)" else "" +
+    " 共 ${orders.size} 单，${orders.sumOf { it.amount }} 元"
+
+// ✅ 这种情况老实用块体
+fun summary(): String {
+    val tag = if (user.isVip) "(VIP)" else ""
+    val total = orders.sumOf { it.amount }
+    return "${user.name} $tag 共 ${orders.size} 单，$total 元"
+}
+```
+
+判断标准：**能不能一眼读完**。需要在脑子里加括号，就该用块体。
+
+## 3. 类成员的顺序
+
+官方建议的顺序，也是大多数 Android 项目的实际约定：
+
+1. 属性声明与初始化块（`init`）
+2. 次构造函数
+3. 方法
+4. 伴生对象 `companion object`
+
+<Callout type="tip">
+
+`companion object` 放**最后**这条经常被违反——很多人从 Java 带来了「常量写最上面」的习惯。
+
+但把它放最后有个实际好处：读一个类时，你最想先看到的是它的**状态**（属性）
+和**行为**（方法），而 companion 里通常是工厂方法和常量，属于附属信息。
+
+Android 里的 `newInstance()` Fragment 工厂就是典型：
+
+```kt
+class DetailFragment : Fragment() {
+    private val viewModel: DetailViewModel by viewModels()
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) { /* ... */ }
+
+    companion object {
+        private const val ARG_ID = "arg_id"
+
+        fun newInstance(id: Long) = DetailFragment().apply {
+            arguments = bundleOf(ARG_ID to id)
+        }
+    }
+}
+```
+
+</Callout>
+
+## 4. 让工具去管，别靠人
+
+规范靠自觉是执行不下去的。Android 工程里两件事值得配：
+
+**ktlint** —— 格式化 + 基础规范检查，可以自动修复：
+
+```kt
+plugins {
+    id("org.jlleitschuh.gradle.ktlint") version "12.1.1"
+}
+```
+
+`./gradlew ktlintFormat` 自动改，`ktlintCheck` 在 CI 上卡关。
+
+**detekt** —— 静态分析，管的是「代码坏味道」而不是格式：函数太长、圈复杂度太高、
+嵌套太深、检测到 `!!` 等等。
+
+```kt
+plugins {
+    id("io.gitlab.arturbosch.detekt") version "1.23.6"
+}
+```
+
+<Callout type="success">
+
+最小可行配置：**ktlint 管格式（能自动修），detekt 管质量（人工判断），两个都挂到 CI**。
+再加一条 pre-commit hook 跑 `ktlintFormat`，格式问题就永远不会出现在 code review 里了。
+
+Code review 应该讨论设计，不该讨论空格。
+
+</Callout>
+
+## 5. Android 项目里的几条补充约定
+
+- **禁止 `!!`**。detekt 有现成规则。确实需要断言时用 `requireNotNull(x) { "原因" }`，
+  至少崩溃时有信息。
+- **`lateinit` 只用于生命周期确定的场景**（`onCreate` 里赋值的 View、注入的依赖）。
+  其他情况用可空类型或 `by lazy`。
+- **不要在 `data class` 里放业务逻辑**。它是数据载体，逻辑放 UseCase / Repository。
+- **`internal` 是多 module 工程的默认可见性**。不打算跨 module 用的类就标 `internal`，
+  能显著减少无意的耦合。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      下面哪个命名符合官方规范？
+      <br />
+      <code>val defaultRetrofit = Retrofit.Builder().build()</code>（顶层属性）
+    </>
+  }
+  options={[
+    '不符合，应该改成 DEFAULT_RETROFIT',
+    '符合，非 const 的 val 用小驼峰',
+    '不符合，顶层属性必须放在 object 里',
+    '符合，但必须加 const',
+  ]}
+  answer={1}
+>
+
+符合。规范的分界线是**能不能内联成字面量**：
+
+- `const val` 只能修饰基本类型和 `String`，编译期就被替换成字面量，语义等同 Java 的
+  `static final` 常量 → **全大写下划线**。
+- 其他 `val` 只是「不可重新赋值的属性」，运行时才初始化 → **小驼峰**。
+
+`Retrofit` 实例显然不是编译期常量，所以 `defaultRetrofit` 是对的，
+写成 `DEFAULT_RETROFIT` 反而不规范。选项 D 也不成立——`const` 修饰不了 `Retrofit`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="为什么官方推荐在多行参数列表末尾保留尾逗号（trailing comma）？"
+  options={[
+    '编译器要求必须有',
+    '增删参数时 diff 只涉及一行，不会污染 git blame',
+    '可以提升编译速度',
+    '为了和 Java 保持一致',
+  ]}
+  answer={1}
+>
+
+纯粹是协作层面的收益。没有尾逗号时，在末尾加一个参数会产生**两行改动**：
+新增的那行，以及给上一行补逗号——后者会让 `git blame` 把上一行的作者改成你，
+code review 里也多一行噪音。
+
+这在参数经常增删的 data class 和 Compose 组件上体感很明显。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="ktlint 和 detekt 的分工是什么？"
+  options={[
+    '两个是竞品，选一个就行',
+    'ktlint 管格式且大多能自动修复，detekt 管代码坏味道需要人工判断',
+    'ktlint 用于 Kotlin，detekt 用于 Java',
+    'detekt 管格式，ktlint 管质量',
+  ]}
+  answer={1}
+>
+
+两者是互补的，实践中通常一起用：
+
+- **ktlint**：缩进、空格、import 顺序、行宽这类**格式**问题，`ktlintFormat` 能一键改完。
+- **detekt**：函数过长、圈复杂度过高、嵌套过深、用了 `!!`、空的 catch 块这类**设计与质量**
+  问题，没有机械的修法，需要人来判断。
+
+配套建议：pre-commit hook 跑 `ktlintFormat`，CI 上跑 `ktlintCheck` + `detekt`。
+这样 code review 里就不会再出现关于空格的讨论了。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="关于 Android 项目里的 Kotlin 实践，哪些建议是合理的？"
+  options={[
+    '用 requireNotNull(x) { "原因" } 代替裸的 !!',
+    'lateinit 只用在生命周期确定的场景',
+    '不打算跨 module 使用的类标记为 internal',
+    '所有属性都应该用 lateinit 以避免可空类型',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+- **A**：两者都会崩，但 `requireNotNull` 能带上原因，线上排查时价值巨大。
+- **B**：`lateinit` 的语义是「我保证用之前一定赋值」。只有 `onCreate` 里赋值的 View、
+  注入的依赖这类生命周期明确的场景撑得住这个保证。
+- **C**：`internal` = 模块内可见，正好对应 Gradle module 边界，是控制多 module 工程耦合的主力工具。
+
+**D 是反模式**：用 `lateinit` 逃避可空性，等于把编译期检查换成了
+`UninitializedPropertyAccessException`。值本来就可能不存在时，就该老实用可空类型。
+
+</Quiz>
 
 ## 官方参考
 

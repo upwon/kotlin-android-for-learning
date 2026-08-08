@@ -1,21 +1,291 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 1.1 基本语法总览」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一课把 Kotlin 的「外形」一次性讲清楚：文件怎么组织、函数长什么样、哪些标点可以不写。
+都是浅层差异，但不先过一遍，后面读代码会一直被这些小东西绊住。
+
+## 1. 包与目录：解绑了
+
+Java 强制要求目录结构和包名一一对应。Kotlin **不要求**：
+
+```kt
+// 文件可以放在 src/main/kotlin/anywhere/at/all.kt
+package com.example.app.util
+
+import android.content.Context
+import android.widget.Toast
+```
+
+<Callout type="warn" title="但在 Android 工程里，还是老老实实对齐">
+
+「不强制」不等于「推荐」。官方规范说得很明确：**在混合 Java/Kotlin 的项目里，
+目录结构应该跟随包名**。Android 工程几乎全是混合项目，而且 AGP 的一些工具链、
+资源生成、混淆规则也默认按目录组织。
+
+真正用得上这个自由度的场景只有一个：把多个相关的小类放进同一个文件，
+不必为每个类建一个目录层级。
+
 </Callout>
 
-## 学习提纲
+Kotlin 的 import 还多了两个 Java 没有的能力：
 
-- 包声明与 import：目录结构不再强制对应包名
-- 顶层函数与顶层属性：告别 XxxUtils 静态类
-- 分号可省略、表达式优先的语法风格
-- 注释与 KDoc
+```kt
+// 1. 可以 import 顶层函数和属性
+import com.example.app.util.formatPrice
 
-## 与 Java / Android 的关键差异
+// 2. 可以起别名，解决命名冲突
+import android.util.Log as AndroidLog
+import com.example.app.Log as AppLog
+```
 
-最直观的差异：类型写在名字后面、没有 new、分号可省。
+别名在 Android 里很实用——`android.graphics.Color` 和你自己的 `Color`
+撞名时不必写全限定名。
+
+## 2. 顶层声明：告别 XxxUtils
+
+Kotlin 里函数和属性都可以直接写在文件顶层，不需要包在类里：
+
+```kotlin
+// 顶层属性
+val APP_NAME = "MyApp"
+
+// 顶层函数
+fun formatPrice(cents: Int): String = "¥%.2f".format(cents / 100.0)
+
+fun main() {
+    println("$APP_NAME: ${formatPrice(12345)}")
+}
+```
+
+<Callout type="java" title="它编译成了什么">
+
+一个叫 `文件名Kt` 的类里的静态成员。上面这段如果写在 `PriceUtils.kt` 里，
+Java 侧要这样调：
+
+```java
+PriceUtilsKt.formatPrice(12345);
+```
+
+觉得这名字难看，可以用 `@file:JvmName` 改掉——注意它必须写在 **package 声明之前**：
+
+```kt
+@file:JvmName("PriceUtils")
+
+package com.example.app.util
+```
+
+这样 Java 侧就是 `PriceUtils.formatPrice(12345)` 了。
+
+</Callout>
+
+所以 Java 里那些 `final class StringUtils { private StringUtils() {} static ... }`
+的样板，在 Kotlin 里就是一个文件里的几个顶层函数。**不要为了「像 Java」而给它们套一层 object。**
+
+## 3. 函数签名的读法
+
+```kotlin
+// fun 名字(参数名: 类型): 返回类型
+fun sum(a: Int, b: Int): Int {
+    return a + b
+}
+
+// 单表达式函数：返回类型可以推断
+fun double(x: Int) = x * 2
+
+// 没有返回值时，返回类型是 Unit，可以省略
+fun log(message: String): Unit {
+    println("[LOG] $message")
+}
+
+fun main() {
+    println(sum(2, 3))
+    println(double(21))
+    log("done")
+}
+```
+
+三个要点：
+
+- **类型写在名字后面**，用冒号分隔。参数、返回值、变量都是这个规律。
+- `Unit` 相当于 Java 的 `void`，但它是**真实存在的类型**（有唯一实例），
+  所以可以作为泛型参数用——`Function<Unit>` 是合法的，`Function<void>` 不是。
+- 单表达式函数用 `=` 而不是 `{ return ... }`。
+
+## 4. 可以省略的标点
+
+```kotlin
+fun main() {
+    val a = 1        // 没有分号
+    val b = 2
+
+    // 创建对象没有 new
+    val list = ArrayList<Int>()
+    list.add(a + b)
+
+    // 单参数 lambda 的参数名默认是 it
+    list.forEach { println(it) }
+
+    // 最后一个参数是 lambda 时可以移到括号外
+    val evens = (1..10).filter { it % 2 == 0 }
+    println(evens)
+}
+```
+
+| 省略了什么 | 说明 |
+| --- | --- |
+| 分号 | 一行一句时不需要；一行写多句才要 |
+| `new` | 构造函数像普通函数一样调用 |
+| lambda 参数名 | 单参数时默认叫 `it` |
+| 尾随 lambda 的括号 | 最后一个参数是 lambda 时可以挪到 `()` 外 |
+
+<Callout type="warn" title="分号能省，但换行有意义">
+
+Kotlin 不是完全自由格式的。这段代码不会按你想的那样工作：
+
+```kt
+fun bad(): Int {
+    return
+        42        // ❌ 返回 Unit，然后 42 是死代码
+}
+```
+
+`return` 后面直接换行，编译器会认为语句已经结束。**运算符要留在行尾**，不要放到下一行行首：
+
+```kt
+val ok = 1 +
+    2 + 3          // ✅ + 在行尾
+
+val bad = 1
+    + 2 + 3        // ❌ 这是两条语句，bad == 1
+```
+
+</Callout>
+
+## 5. 注释与 KDoc
+
+行注释和块注释与 Java 一致，但文档注释用的是 **KDoc**（Markdown 语法，不是 HTML）：
+
+```kt
+/**
+ * 把分为单位的价格格式化成显示用的字符串。
+ *
+ * 用法：
+ * ```
+ * formatPrice(12345)   // "¥123.45"
+ * ```
+ *
+ * @param cents 以分为单位的金额，**不接受负数**
+ * @return 带 ¥ 前缀、保留两位小数的字符串
+ * @throws IllegalArgumentException 当 [cents] 为负数
+ * @see parsePrice
+ */
+fun formatPrice(cents: Int): String = TODO()
+```
+
+和 Javadoc 的三处差异：正文写 **Markdown** 而不是 HTML；用 `[标识符]` 交叉引用
+（不是 `{@link}`）；**块注释可以嵌套**——`/* /* */ */` 在 Kotlin 里合法，
+所以注释掉一大段含注释的代码不会翻车。
+
+## 练习
+
+<Quiz
+  index={1}
+  question="Kotlin 里 Unit 和 Java 的 void 最本质的区别是什么？"
+  options={[
+    '没有区别，只是名字不同',
+    'Unit 是真实的类型且有唯一实例，可以做泛型参数；void 不是类型',
+    'Unit 表示函数会抛异常',
+    'Unit 只能用在顶层函数上',
+  ]}
+  answer={1}
+>
+
+`void` 在 Java 里是一个关键字、一个「没有返回值」的标记，它不是类型，
+所以你不能写 `List<void>`。
+
+`Unit` 是货真价实的类型，有且只有一个实例（也叫 `Unit`）。这让泛型能统一处理
+「有返回值」和「没返回值」两种情况——`(Int) -> Unit` 和 `(Int) -> String`
+在类型系统里是同一类东西，这正是 lambda 能被统一表达的前提。
+
+顺带一提，「什么都不返回」还有另一个类型 `Nothing`，表示函数永远不会正常返回
+（比如一定抛异常）。两者别混淆。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      顶层函数 <code>formatPrice</code> 写在 <code>PriceUtils.kt</code> 里，Java 侧默认怎么调用？
+    </>
+  }
+  options={[
+    'PriceUtils.formatPrice(...)',
+    'PriceUtilsKt.formatPrice(...)',
+    'formatPrice(...)，可以直接调',
+    'PriceUtils.INSTANCE.formatPrice(...)',
+  ]}
+  answer={1}
+>
+
+顶层声明会被编译进一个名为「文件名 + Kt」的类，作为静态成员。所以默认是
+`PriceUtilsKt.formatPrice(...)`。
+
+想去掉这个 `Kt` 后缀，在文件最开头（**package 声明之前**）加：
+
+```
+@file:JvmName("PriceUtils")
+```
+
+选项 D 那个 `INSTANCE` 是 `object` 声明才有的形式，顶层函数不是那样编译的。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      下面这个函数返回什么？
+      <br />
+      <code>fun f(): Int {'{'} return</code>
+      <br />
+      <code>&nbsp;&nbsp;&nbsp;&nbsp;42 {'}'}</code>
+    </>
+  }
+  options={[
+    '返回 42',
+    '编译错误',
+    '返回 0',
+    '能编译，但 42 是死代码',
+  ]}
+  answer={1}
+>
+
+编译错误。`return` 后面直接换行时，编译器认为这条语句已经结束——即
+`return` 一个 `Unit`，但函数声明的返回类型是 `Int`，类型不匹配。
+
+这是「分号可省」带来的唯一真正陷阱。记住一条规则就够了：**运算符和 `return`
+的操作数要留在同一行的行尾**，不要放到下一行行首。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="关于 Kotlin 的包与目录结构，哪些说法正确？"
+  options={[
+    '语言层面不强制目录结构与包名对应',
+    '官方规范建议在混合 Java/Kotlin 的项目里仍然保持对应',
+    'import 可以起别名来解决命名冲突',
+    '一个文件里只能有一个 public 类',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+前三项都对。特别是 D 是错的——Kotlin **没有** Java 那个「一个文件只能有一个 public 类、
+且类名必须等于文件名」的限制。你可以把一组相关的小类（比如一个 sealed 层级的所有子类）
+放进同一个文件，这在 Kotlin 里是被鼓励的做法。
+
+</Quiz>
 
 ## 官方参考
 
-- 官方中文：[basic-syntax](https://book.kotlincn.net/text/basic-syntax.html)
-- 官方英文：[basic-syntax](https://kotlinlang.org/docs/basic-syntax.html)
+- 官方中文：[basic-syntax](https://book.kotlincn.net/text/basic-syntax.html) ／ [packages](https://book.kotlincn.net/text/packages.html)
+- 官方英文：[basic-syntax](https://kotlinlang.org/docs/basic-syntax.html) ／ [kotlin-doc](https://kotlinlang.org/docs/kotlin-doc.html)

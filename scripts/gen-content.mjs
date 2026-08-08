@@ -53,6 +53,7 @@ const parts = [
         ],
         javaNote: 'Android 项目里 Kotlin 与 Java 可以逐文件共存，迁移不必一次到位。',
         official: 'getting-started',
+        deep: true,
       },
       {
         title: 'Kotlin 之旅（精简）',
@@ -61,6 +62,7 @@ const parts = [
         outline: ['Hello World 与 main', '变量、类型与字符串模板', '集合与 lambda 速览', '类与 null 安全速览'],
         javaNote: '先建立「Kotlin 长什么样」的直觉，细节留给后面各章。',
         official: 'kotlin-tour-welcome',
+        deep: true,
       },
     ],
   },
@@ -81,6 +83,7 @@ const parts = [
         ],
         javaNote: '最直观的差异：类型写在名字后面、没有 new、分号可省。',
         official: 'basic-syntax',
+        deep: true,
       },
       {
         num: '1.2',
@@ -106,6 +109,7 @@ const parts = [
         ],
         javaNote: 'Android 自定义 View 的三个构造函数重载，可以用默认参数收敛成一个。',
         official: 'functions',
+        deep: true,
       },
       {
         num: '1.4',
@@ -115,6 +119,7 @@ const parts = [
         outline: ['常用 idiom 速查表', 'if/when 作为表达式返回值', '集合链式操作替代 for 循环', 'apply / also 构建对象'],
         javaNote: '判断代码是否「Kotlin 味」的一组参照。',
         official: 'idioms',
+        deep: true,
       },
       {
         num: '1.5',
@@ -124,6 +129,7 @@ const parts = [
         outline: ['命名与文件组织', '格式化与 ktlint / detekt', '表达式体 vs 块体的取舍', 'Android 项目里的实践建议'],
         javaNote: '官方规范比 Java 更强调「短、表达式化」。',
         official: 'coding-conventions',
+        deep: true,
       },
     ],
   },

@@ -1,22 +1,321 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 1.3 函数 & 单表达式函数」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一课只讲一件事的三种后果：**Kotlin 有默认参数和具名实参**。
+它直接干掉了 Java 里的方法重载、Builder 模式和一半的工厂方法。
+
+## 1. 默认参数：重载没了
+
+Java 里想让一个方法支持多种调用方式，只能写一串重载：
+
+```kt
+// Java 风格
+public void showToast(String msg) { showToast(msg, Toast.LENGTH_SHORT, 0); }
+public void showToast(String msg, int duration) { showToast(msg, duration, 0); }
+public void showToast(String msg, int duration, int gravity) { /* 真正的实现 */ }
+```
+
+Kotlin 一个函数搞定：
+
+```kotlin
+fun showToast(
+    message: String,
+    durationMs: Int = 2000,
+    gravity: String = "bottom",
+): String = "[$gravity, ${durationMs}ms] $message"
+
+fun main() {
+    println(showToast("保存成功"))
+    println(showToast("网络错误", 5000))
+    println(showToast("居中提示", gravity = "center"))   // 跳过中间参数
+}
+```
+
+注意最后一行：**用具名实参可以跳过中间的参数**，这是重载做不到的。
+
+<Callout type="warn" title="默认值在调用点求值">
+
+默认参数表达式**每次调用时**都会重新求值，不是在函数定义时算一次：
+
+```kotlin
+fun addItem(item: String, list: MutableList<String> = mutableListOf()): List<String> {
+    list.add(item)
+    return list
+}
+
+fun main() {
+    println(addItem("a"))   // [a]
+    println(addItem("b"))   // [b]，不是 [a, b]
+}
+```
+
+写过 Python 的会对这个特别敏感——Python 的默认参数是在函数定义时求值一次的，
+所以可变默认参数是经典陷阱。**Kotlin 没有这个坑。**
+
 </Callout>
 
-## 学习提纲
+## 2. 具名实参：布尔参数不再是谜语
 
-- 默认参数 + 具名实参如何干掉方法重载与 Builder
-- 单表达式函数 `fun f() = ...`
-- Unit 与 Nothing
-- 局部函数与嵌套
-- @JvmOverloads：给 Java 侧留后门
+```kotlin
+fun createUser(name: String, isAdmin: Boolean, isActive: Boolean, sendEmail: Boolean) =
+    "$name admin=$isAdmin active=$isActive email=$sendEmail"
 
-## 与 Java / Android 的关键差异
+fun main() {
+    // 这行谁看得懂？
+    println(createUser("Summer", true, false, true))
 
-Android 自定义 View 的三个构造函数重载，可以用默认参数收敛成一个。
+    // 这行不用查签名
+    println(createUser(
+        name = "Summer",
+        isAdmin = true,
+        isActive = false,
+        sendEmail = true,
+    ))
+}
+```
+
+<Callout type="tip">
+
+团队约定一条就够用：**超过一个布尔参数，或者参数超过三个，调用时一律用具名实参。**
+IDE 里 `Ctrl+P` 看签名的次数会显著下降。
+
+</Callout>
+
+## 3. Android 实战：自定义 View 的构造函数
+
+这是默认参数在 Android 上最经典的收益点。Java 里自定义 View 要写三个（有时四个）构造函数：
+
+```kt
+// Java 风格，在 Kotlin 里也能这么写，但没必要
+class MyView : View {
+    constructor(context: Context) : super(context)
+    constructor(context: Context, attrs: AttributeSet?) : super(context, attrs)
+    constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int)
+        : super(context, attrs, defStyleAttr)
+}
+```
+
+用默认参数收敛成一个：
+
+```kt
+class MyView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0,
+) : View(context, attrs, defStyleAttr)
+```
+
+<Callout type="warn" title="@JvmOverloads 在这里不是可选的">
+
+Kotlin 的默认参数**在字节码层面只生成一个方法**（外加一个带 mask 的合成方法）。
+这意味着：
+
+- Kotlin 侧调用：三种写法都能用 ✅
+- **Java 侧调用：只有全参数那一个签名** ❌
+
+而 XML 里写 `<com.example.MyView />` 时，**是系统用反射按 `(Context, AttributeSet)`
+这个两参数签名去找构造函数的**。没有 `@JvmOverloads`，布局一 inflate 就崩。
+
+`@JvmOverloads` 会让编译器额外生成所有重载版本，专门给 Java 和反射用。
+规则很简单：**这个 API 会被 Java 或反射调用，就加上它。**
+
+</Callout>
+
+## 4. 单表达式函数
+
+函数体只有一个表达式时，用 `=` 直接给出：
+
+```kotlin
+// 块体
+fun maxOf1(a: Int, b: Int): Int {
+    return if (a > b) a else b
+}
+
+// 表达式体，返回类型可推断
+fun maxOf2(a: Int, b: Int) = if (a > b) a else b
+
+fun main() {
+    println(maxOf2(3, 7))
+}
+```
+
+<Callout type="warn" title="公开 API 建议显式写返回类型">
+
+表达式体的返回类型可以省，但省了之后**返回类型就随实现漂移**。
+某天你改了实现，返回类型可能悄悄从 `List<String>` 变成 `MutableList<String>`，
+调用方全都跟着变，而编译器一句都不会提醒。
+
+官方规范的说法是：**公开 API 一律显式声明返回类型。** 私有/局部函数随意。
+
+</Callout>
+
+## 5. Unit 与 Nothing
+
+```kotlin
+// Unit：没有有意义的返回值，可省略
+fun log(msg: String) {
+    println("[LOG] $msg")
+}
+
+// Nothing：永远不会正常返回
+fun fail(message: String): Nothing = throw IllegalStateException(message)
+
+fun parse(input: String?): Int {
+    // 因为 fail 返回 Nothing，编译器知道这行之后 input 一定非空
+    val s = input ?: fail("输入不能为空")
+    return s.length
+}
+
+fun main() {
+    println(parse("hello"))
+    println(runCatching { parse(null) }.exceptionOrNull()?.message)
+}
+```
+
+`Nothing` 是**所有类型的子类型**，所以它能出现在任何位置而不破坏类型检查。
+这就是 `throw`、`return`、`TODO()` 能直接放在 Elvis 右边的原因。
+
+## 6. 局部函数
+
+函数可以嵌套定义，并且能直接访问外层的局部变量：
+
+```kotlin
+fun validateUser(name: String, email: String): List<String> {
+    val errors = mutableListOf<String>()
+
+    // 局部函数：闭包捕获了 errors，不用传参
+    fun require(condition: Boolean, message: String) {
+        if (!condition) errors += message
+    }
+
+    require(name.isNotBlank(), "用户名不能为空")
+    require(name.length <= 20, "用户名过长")
+    require("@" in email, "邮箱格式不对")
+
+    return errors
+}
+
+fun main() {
+    println(validateUser("", "bad-email"))
+    println(validateUser("Summer", "s@example.com"))
+}
+```
+
+比起把这种小helper提成 private 方法，局部函数的好处是**作用域正好**——
+它只在这一个函数里有意义，不会污染类的命名空间。
+
+## 7. vararg 与展开
+
+```kotlin
+fun joinTags(prefix: String, vararg tags: String): String =
+    "$prefix: ${tags.joinToString(", ")}"
+
+fun main() {
+    println(joinTags("标签", "kotlin", "android"))
+
+    val existing = arrayOf("coroutine", "flow")
+    // 传数组给 vararg 要用展开运算符 *
+    println(joinTags("已有", *existing))
+    println(joinTags("混合", "new", *existing))
+}
+```
+
+和 Java 的 `String...` 基本一致，多了一个 `*` 展开运算符（Java 是直接传数组）。
+另外 Kotlin 的 `vararg` **不必是最后一个参数**——后面的参数用具名实参传就行。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      自定义 View 用了默认参数但忘了加 <code>@JvmOverloads</code>，会发生什么？
+    </>
+  }
+  options={[
+    '编译报错',
+    'Kotlin 侧正常，但 XML 里 inflate 这个 View 时崩溃',
+    '没有任何影响，@JvmOverloads 只是优化',
+    '默认值会失效，变成 null 和 0',
+  ]}
+  answer={1}
+>
+
+Kotlin 的默认参数在字节码里**只生成一个全参数方法**。而 XML inflate 时，
+系统是用反射按 `(Context, AttributeSet)` 这个两参数签名去找构造函数的——找不到就抛
+`NoSuchMethodException`，表现为 `InflateException`。
+
+`@JvmOverloads` 让编译器额外生成所有重载版本。判断标准：**这个 API 会不会被 Java
+或反射调用**。自定义 View 两者都占。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>fun addItem(item: String, list: MutableList&lt;String&gt; = mutableListOf())</code>
+      <br />
+      连续调用 <code>addItem("a")</code> 和 <code>addItem("b")</code>，第二次返回什么？
+    </>
+  }
+  options={['[a, b]', '[b]', '[a]', '编译错误']}
+  answer={1}
+>
+
+`[b]`。Kotlin 的默认参数表达式是在**每次调用时**重新求值的，所以每次都会创建一个新的空 list。
+
+这一点和 Python 相反——Python 的默认参数在函数定义时求值一次，可变默认参数会在多次调用间
+共享状态，是经典陷阱。Kotlin 没有这个问题。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>fun fail(msg: String): Nothing = throw IllegalStateException(msg)</code>
+      <br />
+      为什么 <code>val s = input ?: fail("空")</code> 之后，编译器知道 s 是非空的？
+    </>
+  }
+  options={[
+    '因为 Elvis 运算符总是返回非空值',
+    '因为 Nothing 是所有类型的子类型，且表示永不正常返回，编译器知道右分支不会产生值',
+    '因为 fail 抛了异常',
+    '因为 input 被 smart cast 了',
+  ]}
+  answer={1}
+>
+
+`Nothing` 是**所有类型的子类型**，同时表示「这条路径永远不会正常返回」。
+
+所以 `input ?: fail(...)` 的类型推断是这样的：左边是 `String?` 去掉 null 后的 `String`，
+右边是 `Nothing`（是 `String` 的子类型），两者的公共超类型就是 `String`。
+编译器进一步知道右分支不会产出值，于是整个表达式的结果一定来自左边且非空。
+
+这就是 `throw`、`return`、`TODO()` 能直接写在 Elvis 右边的原理。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="哪些情况下应该显式写出函数的返回类型？"
+  options={[
+    '公开 API（public 函数）',
+    '返回类型不能一眼看出来的复杂表达式',
+    '所有单表达式函数都必须写',
+    '递归函数',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+- **A**：官方规范明确要求。省略返回类型意味着它会随实现漂移，改实现时可能悄悄改了公开签名。
+- **B**：可读性。`fun f() = repo.load().map { it.toVo() }.filter { ... }` 的返回类型没人想去推。
+- **D**：递归函数**必须**显式写——编译器推断类型时需要先知道返回类型，否则会陷入循环，直接报错。
+- **C** 错：私有和局部的单表达式函数完全可以省略，那正是它简洁的价值所在。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[functions](https://book.kotlincn.net/text/functions.html)
-- 官方英文：[functions](https://kotlinlang.org/docs/functions.html)
+- 官方英文：[functions](https://kotlinlang.org/docs/functions.html) ／ [java-to-kotlin-interop](https://kotlinlang.org/docs/java-to-kotlin-interop.html)

@@ -1,19 +1,315 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 Kotlin 之旅（精简）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一章的目标不是教会你什么，而是让你在 30 分钟内**见过 Kotlin 的全貌**，
+后面各章深入时心里有个坐标。所有代码块都能直接跑，建议边看边改。
+
+<Callout type="java">
+
+阅读方式：把每段代码先在心里翻成 Java，再看 Kotlin 少写了什么、多了什么。
+少写的部分是语法糖，多出来的部分才是需要重新建立直觉的地方。
+
 </Callout>
 
-## 学习提纲
+## 1. 程序入口与顶层函数
 
-- Hello World 与 main
-- 变量、类型与字符串模板
-- 集合与 lambda 速览
-- 类与 null 安全速览
+```kotlin
+// 没有类也能有函数——顶层函数是一等公民
+fun greet(name: String) = "你好，$name"
 
-## 与 Java / Android 的关键差异
+fun main() {
+    println(greet("Summer"))
+}
+```
 
-先建立「Kotlin 长什么样」的直觉，细节留给后面各章。
+三处差异：函数用 `fun`；**函数可以不属于任何类**；单表达式函数用 `=` 直接给出返回值，
+返回类型可推断。
+
+Java 里的 `StringUtils`、`DateUtils` 这类纯静态工具类，在 Kotlin 里通常直接写成顶层函数。
+
+## 2. 变量与字符串模板
+
+```kotlin
+fun main() {
+    val name = "Summer"      // 只读，类型推断为 String
+    var count = 3            // 可变
+    val price: Double = 9.9  // 也可以显式写类型
+
+    count++
+
+    println("$name 买了 $count 件，共 ${price * count} 元")
+    println("字符串长度：${name.length}")
+}
+```
+
+`$变量` 直接插值，复杂表达式用 `${...}`。这基本取代了 `String.format` 和字符串拼接。
+
+## 3. 条件与循环都是表达式
+
+```kotlin
+fun grade(score: Int): String = when {
+    score >= 90 -> "优秀"
+    score >= 60 -> "及格"
+    else -> "不及格"
+}
+
+fun main() {
+    // if 有返回值，不需要三元运算符
+    val max = if (3 > 5) 3 else 5
+    println("max = $max")
+
+    // when 可以匹配值、区间、类型
+    for (score in listOf(95, 72, 40)) {
+        println("$score -> ${grade(score)}")
+    }
+
+    // 区间 range
+    for (i in 1..3) print("$i ")
+    println()
+    for (i in 3 downTo 1) print("$i ")
+}
+```
+
+`when` 是 `switch` 的超集：能匹配区间、类型、任意布尔条件，而且**有返回值**。
+
+## 4. 集合与 lambda
+
+```kotlin
+data class User(val name: String, val age: Int)
+
+fun main() {
+    val users = listOf(
+        User("Summer", 28),
+        User("Xia", 35),
+        User("Aki", 22),
+    )
+
+    val names = users
+        .filter { it.age >= 25 }
+        .sortedBy { it.age }
+        .map { it.name }
+
+    println(names)
+    println("平均年龄：${users.map { it.age }.average()}")
+
+    // 按年龄段分组
+    println(users.groupBy { if (it.age >= 30) "30+" else "30-" })
+}
+```
+
+不需要 `stream()` 和 `collect()`，集合上直接就有这些扩展函数。单参数 lambda 的参数名默认是 `it`。
+
+## 5. 类：一行顶一个 POJO
+
+```kotlin
+// 主构造函数直接声明属性，data 关键字生成
+// equals / hashCode / toString / copy / componentN
+data class Article(
+    val id: Long,
+    val title: String,
+    val author: String = "匿名",   // 默认参数
+)
+
+fun main() {
+    val a = Article(id = 1, title = "Kotlin 入门")   // 具名实参
+    println(a)
+
+    // copy 出一个只改了标题的新对象
+    val b = a.copy(title = "Kotlin 进阶")
+    println(b)
+    println("a == b ? ${a == b}")   // == 就是 equals
+}
+```
+
+<Callout type="warn">
+
+`==` 在 Kotlin 里是 **结构相等**（编译成 `equals`），`===` 才是引用比较。
+这和 Java 正好相反，是最容易出错的一处。
+
+</Callout>
+
+## 6. 空安全
+
+```kotlin
+fun main() {
+    val nickname: String? = null      // 类型带 ? 才可以为 null
+
+    // println(nickname.length)       // ❌ 编译不过
+
+    println(nickname?.length)                  // 安全调用 → null
+    println(nickname?.length ?: 0)             // Elvis 兜底 → 0
+    nickname?.let { println("有昵称：$it") }    // 为 null 就不执行
+
+    val s: Any = "Kotlin"
+    if (s is String) {
+        println("智能转换后可直接用：${s.uppercase()}")
+    }
+}
+```
+
+**这是整门语言最重要的设计**：能不能为 null 是**类型的一部分**，编译器强制你处理。
+详见 [1.2](/docs/01-basics/val-var-null-safety) 和 [6.1](/docs/06-null-safety/null-safety)。
+
+## 7. 扩展函数
+
+```kotlin
+// 给你无权修改的类加方法
+fun String.isPhoneNumber(): Boolean =
+    length == 11 && all { it.isDigit() } && startsWith("1")
+
+fun Int.dp(): String = "${this * 3}px（假设 density = 3）"
+
+fun main() {
+    println("13800138000".isPhoneNumber())
+    println("hello".isPhoneNumber())
+    println(16.dp())
+}
+```
+
+Android 上这是高频武器：`Context.toast()`、`View.gone()`、`Int.dp` 之类的扩展能大幅减少样板代码。
+
+## 8. sealed class：UI State 的标准建模
+
+```kotlin
+sealed interface UiState {
+    data object Loading : UiState
+    data class Success(val data: List<String>) : UiState
+    data class Error(val message: String) : UiState
+}
+
+fun render(state: UiState): String = when (state) {
+    // 不需要 else：编译器知道所有分支都覆盖到了
+    UiState.Loading -> "转圈中…"
+    is UiState.Success -> "拿到 ${state.data.size} 条数据"
+    is UiState.Error -> "出错了：${state.message}"
+}
+
+fun main() {
+    println(render(UiState.Loading))
+    println(render(UiState.Success(listOf("a", "b"))))
+    println(render(UiState.Error("网络超时")))
+}
+```
+
+比枚举强的地方在于**每个分支可以带不同的数据**。而且以后新增一个分支时，
+所有没覆盖到它的 `when` 都会编译报错——这是重构时的安全网。
+
+## 9. 协程：用同步的写法做异步的事
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun fetchUser(): String {
+    delay(300)          // 挂起，不阻塞线程
+    return "Summer"
+}
+
+suspend fun fetchOrders(): List<String> {
+    delay(500)
+    return listOf("订单A", "订单B")
+}
+
+fun main() = runBlocking {
+    val elapsed = kotlin.system.measureTimeMillis {
+        // async 并发发起，await 处汇合
+        val user = async { fetchUser() }
+        val orders = async { fetchOrders() }
+
+        println("${user.await()} 有 ${orders.await().size} 个订单")
+    }
+    println("耗时约 ${elapsed}ms —— 不是 800ms，因为是并发的")
+}
+```
+
+<Callout type="tip">
+
+注意这段代码里**没有任何回调**。这就是协程的核心价值：异步代码可以顺着从上往下读。
+
+Android 上你几乎不会用 `runBlocking`，而是用 `viewModelScope.launch { }`，
+它会在 ViewModel 销毁时自动取消所有子协程。详见[第 8 部](/docs/08-coroutines/basics)。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question="下面哪个说法是对的？"
+  options={[
+    'Kotlin 的 == 比较引用，=== 比较内容',
+    'Kotlin 的 == 比较内容（调用 equals），=== 比较引用',
+    'Kotlin 只有 ==，没有 ===',
+    'Kotlin 的 == 对基本类型比较值，对对象比较引用',
+  ]}
+  answer={1}
+>
+
+Kotlin 的 `==` 会被编译成 `equals()` 调用（并且自带 null 检查），`===` 才是 Java 里
+`==` 那种引用比较。这和 Java 的直觉正好相反，是从 Java 转过来最容易写错的一处。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      用 sealed interface 建模 UiState 后，<code>when (state)</code> 为什么可以不写 else？
+    </>
+  }
+  options={[
+    'when 本来就不强制写 else',
+    '编译器知道 sealed 的子类是有限且已知的，覆盖全了就是穷尽的',
+    '因为用了 data class',
+    '因为 UiState 是接口而不是类',
+  ]}
+  answer={1}
+>
+
+`sealed` 的含义是「子类集合在编译期是封闭、已知的」。所以当 `when` 覆盖了全部子类时，
+编译器能证明它是**穷尽的** exhaustive，不需要 `else`。
+
+反过来这也是它最大的价值：以后新增一个子类，所有没覆盖到它的 `when` 都会**编译报错**，
+逼你去补——这是枚举和普通继承都给不了的重构安全网。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  type="fill"
+  question={
+    <>
+      把这段 Java 用 Kotlin 字符串模板重写：
+      <br />
+      <code>String.format("%s 今年 %d 岁", name, age)</code>
+    </>
+  }
+  answer={['"$name 今年 $age 岁"', '"${name} 今年 ${age} 岁"']}
+>
+
+字符串模板用 `$变量` 直接插值，复杂表达式用 `${...}` 包起来。
+
+这基本可以完全取代 `String.format` 和字符串拼接——可读性更好，而且编译器会检查变量是否存在，
+不像 `String.format` 那样只有运行时才发现参数个数对不上。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="第 9 节那段协程代码，两个挂起函数分别 delay 300ms 和 500ms，总耗时约为？"
+  options={['约 800ms', '约 500ms', '约 300ms', '不确定，取决于线程数']}
+  answer={1}
+>
+
+约 500ms。两个 `async` 会**并发**发起，`await()` 只是在汇合点等待结果，
+所以总耗时取决于较慢的那个（500ms），而不是两者之和。
+
+如果去掉 `async` 直接顺序调用 `fetchUser()` 和 `fetchOrders()`，那才是约 800ms。
+这个区别在[8.4 组合挂起函数](/docs/08-coroutines/composing-suspending-functions)里会展开。
+
+</Quiz>
+
+## 接下来
+
+这一圈跑下来，你应该已经看出哪些是「换个写法的 Java」，哪些是真正的新东西。
+建议从 [1.2 val/var、类型推断、空安全世界观](/docs/01-basics/val-var-null-safety) 正式开始——
+那是从 Java 转过来最需要重塑思维的一课。
 
 ## 官方参考
 
