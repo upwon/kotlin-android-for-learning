@@ -43,18 +43,20 @@
 - [Now in Android](https://github.com/android/nowinandroid) —— Google 官方示例项目，
   是当前 Android 工程实践的参考答案
 
-## 3. 本站没覆盖但 Android 上会用到的
+## 3. 框架层：本站讲到什么程度
 
-这些超出了「Kotlin 语言」的范围，但学完本站后自然会遇到：
+[第 10 部](/docs/10-jetpack/compose-foundations)用**Kotlin 语言视角**解释了 Jetpack 与
+Compose 的设计——它们的写法为什么长这样、踩在哪些语言特性上。但它**不是 API 教程**：
+具体有哪些组件、哪些参数、怎么配置，仍然要看官方文档。
 
-| 主题 | 建议入口 |
-| --- | --- |
-| **Jetpack Compose** | [官方教程](https://developer.android.com/jetpack/compose)。前置知识是本站的 [9.4 DSL](/docs/09-advanced/type-safe-builders)、[5.2 Lambda](/docs/05-functional/lambdas)、[8.6 Flow](/docs/08-coroutines/flow) |
-| **Hilt / 依赖注入** | [官方文档](https://developer.android.com/training/dependency-injection/hilt-android)。前置是 [4.12 对象声明](/docs/04-classes/object-declarations) |
-| **Room** | [官方文档](https://developer.android.com/training/data-storage/room)。返回 `Flow` 是标准用法 |
-| **WorkManager** | 需要「比页面活得久」的后台任务时用它，而不是 `GlobalScope` |
-| **kotlinx.serialization** | [官方文档](https://kotlinlang.org/docs/serialization.html)。比 Gson 更适合 Kotlin |
-| **单元测试与协程测试** | `kotlinx-coroutines-test` 的 `runTest`、`TestDispatcher` |
+| 主题 | 本站讲了什么 | API 细节看这里 |
+| --- | --- | --- |
+| **Jetpack Compose** | [10.1](/docs/10-jetpack/compose-foundations) 编译器改写与嵌套 DSL、[10.2](/docs/10-jetpack/compose-state) 状态与 Flow、[10.3](/docs/10-jetpack/compose-stability) 稳定性与重组、[10.4](/docs/10-jetpack/modifier) Modifier | [官方教程](https://developer.android.com/jetpack/compose) |
+| **Hilt / 依赖注入** | [10.5](/docs/10-jetpack/viewmodel-and-di) 构造函数注入、`@Binds` vs `@Provides` | [官方文档](https://developer.android.com/training/dependency-injection/hilt-android) |
+| **Room / DataStore / Paging** | [10.6](/docs/10-jetpack/data-layer) 单一数据源、为什么 `Flow` 不加 `suspend` | [架构指南 · 数据层](https://developer.android.com/topic/architecture/data-layer) |
+| **Navigation** | [10.7](/docs/10-jetpack/navigation) 类型安全路由的机制 | [官方文档](https://developer.android.com/guide/navigation) |
+| **协程与 Compose 测试** | [10.8](/docs/10-jetpack/testing) 虚拟时钟、Fake vs Mock | [官方测试指南](https://developer.android.com/kotlin/coroutines/test) |
+| **WorkManager** | 只在 [8.2](/docs/08-coroutines/basics) 提了一句（别用 `GlobalScope`） | [官方文档](https://developer.android.com/topic/libraries/architecture/workmanager) |
 
 ## 4. 如果之后想学 KMP
 
@@ -67,7 +69,7 @@ Kotlin Multiplatform 是唯一一个「学完本站后可能真的会去碰」�
 - **KMP**：**只共享业务逻辑**（网络、数据库、领域层），UI 各平台原生实现
   （Android 用 Compose，iOS 用 SwiftUI）
 
-所以 KMP 的卖点不是「省一半工作量」，而是**「保留原生 UI 体验的同时共享核心逻辑」**。
+所以 KMP 的卖点不是「省一半工作量」，而是**保留原生 UI 体验的同时共享核心逻辑**。
 
 对有 Flutter 经验的人来说，这个取舍点值得单独想清楚再投入。
 
@@ -83,7 +85,7 @@ Kotlin Multiplatform 是唯一一个「学完本站后可能真的会去碰」�
 
 <Callout type="success">
 
-56 章现在都是精讲状态。建议的使用方式：
+66 章现在都是精讲状态。建议的使用方式：
 
 1. **系统过一遍**：按顺序读，代码块都跑一下、改一下
 2. **当速查手册**：侧边栏有筛选框，忘了某个 API 直接搜
