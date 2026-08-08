@@ -366,12 +366,14 @@ export const toc: Part[] = [
         num: "8.1",
         slug: "08-coroutines/async-overview",
         summary: "从 Thread / Handler / RxJava 到协程。",
+        deep: true,
       },
       {
         title: "协程基础",
         num: "8.2",
         slug: "08-coroutines/basics",
         summary: "suspend、CoroutineScope、launch 与 async。",
+        deep: true,
         star: true,
       },
       {
@@ -379,18 +381,21 @@ export const toc: Part[] = [
         num: "8.3",
         slug: "08-coroutines/cancellation-and-timeouts",
         summary: "协作式取消是最容易踩坑的地方。",
+        deep: true,
       },
       {
         title: "组合挂起函数",
         num: "8.4",
         slug: "08-coroutines/composing-suspending-functions",
         summary: "顺序、并发与惰性启动。",
+        deep: true,
       },
       {
         title: "协程上下文与调度器（Android 主线程 / IO）",
         num: "8.5",
         slug: "08-coroutines/context-and-dispatchers",
         summary: "Dispatchers 决定代码跑在哪个线程。",
+        deep: true,
         star: true,
       },
       {
@@ -398,6 +403,7 @@ export const toc: Part[] = [
         num: "8.6",
         slug: "08-coroutines/flow",
         summary: "协程版的响应式流，Android 数据层的主力。",
+        deep: true,
         star: true,
       },
       {
@@ -405,12 +411,14 @@ export const toc: Part[] = [
         num: "8.7",
         slug: "08-coroutines/channels",
         summary: "协程之间的通信管道。",
+        deep: true,
       },
       {
         title: "异常处理",
         num: "8.8",
         slug: "08-coroutines/exception-handling",
         summary: "异常沿协程树传播的规则。",
+        deep: true,
         star: true,
       },
       {
@@ -418,6 +426,7 @@ export const toc: Part[] = [
         num: "8.9",
         slug: "08-coroutines/shared-mutable-state",
         summary: "协程里的线程安全问题依然存在。",
+        deep: true,
       },
     ],
   },

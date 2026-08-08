@@ -1,20 +1,441 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.6 异步流 Flow」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+`suspend` 函数返回**一个**值，`Flow` 返回**多个**值。
+它是 Android 数据层的主力——Room 查询、UI 状态、用户输入事件，现在全都是 Flow。
+
+## 1. 冷流：collect 才开始
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+fun numbers(): Flow<Int> = flow {
+    println("  开始生产")
+    for (i in 1..3) {
+        delay(100)
+        emit(i)
+    }
+}
+
+fun main() = runBlocking {
+    val f = numbers()
+    println("创建了 Flow，但什么都没发生")
+
+    f.collect { println("收到 $it") }
+    println("---")
+    f.collect { println("再次收集：$it") }   // 重新执行一遍生产逻辑
+}
+```
+
+<Callout type="tip" title="冷流 cold flow">
+
+`Flow` 默认是**冷的**：每次 `collect` 都会重新执行一遍 builder 里的代码。
+没有收集者时，它什么都不做。
+
+这和 `Sequence` 的惰性类似，区别是 Flow 的每一步都可以是**挂起的**。
+
 </Callout>
 
-## 学习提纲
+## 2. 构建 Flow
 
-- Flow 的冷流特性与 collect 触发
-- 常用操作符：map / filter / transform / flatMapLatest
-- 背压与 buffer / conflate / collectLatest
-- StateFlow 与 SharedFlow（热流）
-- Android 实战：Room + Flow + repeatOnLifecycle 收集
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
-## 与 Java / Android 的关键差异
+fun main() = runBlocking {
+    // flow { } —— 最通用，可以挂起
+    flow {
+        emit(1)
+        delay(50)
+        emit(2)
+    }.collect { print("$it ") }
+    println()
 
-RxJava 的 Observable 对位，但取消与线程切换由协程上下文统一管理。
+    // flowOf —— 固定值
+    flowOf("a", "b", "c").collect { print("$it ") }
+    println()
+
+    // 集合转 Flow
+    listOf(1, 2, 3).asFlow().collect { print("$it ") }
+    println()
+
+    // channelFlow —— 需要从多个协程 emit 时
+    channelFlow {
+        launch { delay(50); send("来自协程 A") }
+        launch { delay(30); send("来自协程 B") }
+    }.collect { println(it) }
+}
+```
+
+<Callout type="warn" title="flow { } 里不能从别的协程 emit">
+
+```kt
+// ❌ 抛 IllegalStateException: Flow invariant is violated
+flow {
+    launch { emit(1) }
+}
+
+// ✅ 用 channelFlow
+channelFlow {
+    launch { send(1) }
+}
+```
+
+`flow { }` 要求 `emit` 必须在收集者的协程上下文里调用（这叫**上下文保持**
+context preservation）。需要跨协程发射就用 `channelFlow`。
+
+</Callout>
+
+## 3. 常用操作符
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+fun main() = runBlocking {
+    val source = (1..10).asFlow()
+
+    println(source.map { it * 2 }.filter { it > 10 }.toList())
+    println(source.take(3).toList())
+    println(source.drop(7).toList())
+
+    // transform：一个输入可以 emit 多个输出
+    println(source.take(2).transform { emit("$it-a"); emit("$it-b") }.toList())
+
+    // onEach：副作用，不改变值
+    source.take(2).onEach { println("经过 $it") }.collect()
+
+    // 聚合
+    println(source.reduce { a, b -> a + b })
+    println(source.fold(100) { acc, v -> acc + v })
+    println(source.first())
+    println(source.count())
+
+    // 去重（相邻的）
+    println(flowOf(1, 1, 2, 2, 1).distinctUntilChanged().toList())
+}
+```
+
+## 4. flatMap 三兄弟
+
+这是 Flow 最需要理解的一组操作符：
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+fun request(n: Int): Flow<String> = flow {
+    delay(100)
+    emit("响应$n")
+}
+
+fun main() = runBlocking {
+    val input = flow {
+        emit(1); delay(50)
+        emit(2); delay(50)
+        emit(3)
+    }
+
+    println("--- flatMapLatest：新值到来就取消上一个 ---")
+    input.flatMapLatest { request(it) }.collect { println(it) }
+
+    println("--- flatMapConcat：按顺序，等上一个完成 ---")
+    input.flatMapConcat { request(it) }.collect { println(it) }
+
+    println("--- flatMapMerge：并发，先完成先输出 ---")
+    input.flatMapMerge { request(it) }.collect { println(it) }
+}
+```
+
+| 操作符 | 行为 | 典型场景 |
+| --- | --- | --- |
+| `flatMapLatest` | 新值到来**取消**上一个 | **搜索联想**、条件变化重新查询 |
+| `flatMapConcat` | 按顺序，等上一个完成 | 需要保序的串行请求 |
+| `flatMapMerge` | 并发执行，先完成先输出 | 批量独立请求 |
+
+<Callout type="success">
+
+`flatMapLatest` 是 Android 上最常用的——它天然实现了「取消上一次请求」，
+搜索框场景一行搞定。
+
+</Callout>
+
+## 5. 背压与缓冲
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlin.system.measureTimeMillis
+
+fun fast(): Flow<Int> = flow {
+    for (i in 1..5) { delay(20); emit(i) }
+}
+
+fun main() = runBlocking {
+    // 无缓冲：生产者要等消费者处理完
+    println("无缓冲：${measureTimeMillis { fast().collect { delay(100) } }}ms")
+
+    // buffer：生产和消费并发
+    println("buffer：${measureTimeMillis { fast().buffer().collect { delay(100) } }}ms")
+
+    // conflate：消费不过来就丢弃中间值，只保留最新的
+    println("conflate：${measureTimeMillis { fast().conflate().collect { delay(100) } }}ms")
+
+    // collectLatest：新值到来时取消上一次处理
+    println("collectLatest：${measureTimeMillis {
+        fast().collectLatest { delay(100); println("  处理 $it") }
+    }}ms")
+}
+```
+
+<Callout type="tip" title="UI 场景优先用 conflate 或 collectLatest">
+
+UI 只关心**最新状态**，中间态可以丢：
+
+```kt
+// 高频更新的进度条，丢掉中间值不影响正确性
+downloadProgress.conflate().collect { updateProgressBar(it) }
+
+// 新数据到来时取消上一次的渲染
+viewModel.state.collectLatest { renderExpensively(it) }
+```
+
+</Callout>
+
+## 6. 热流：StateFlow 与 SharedFlow
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+fun main() = runBlocking {
+    // StateFlow：永远有一个当前值，新订阅者立刻收到它
+    val state = MutableStateFlow(0)
+
+    val job = launch {
+        state.collect { println("收到状态 $it") }
+    }
+    delay(50)
+    state.value = 1
+    state.value = 2
+    state.value = 2        // 和上一个相等，不发射（自动去重）
+    delay(50)
+    job.cancel()
+
+    println("---")
+
+    // SharedFlow：没有当前值，只广播事件
+    val events = MutableSharedFlow<String>()
+    val job2 = launch { events.collect { println("事件 $it") } }
+    delay(50)
+    events.emit("点击")
+    events.emit("点击")     // 不去重
+    delay(50)
+    job2.cancel()
+}
+```
+
+| | `StateFlow` | `SharedFlow` |
+| --- | --- | --- |
+| 初始值 | **必须有** | 无 |
+| 当前值 | `.value` 可读 | 无 |
+| 新订阅者 | **立刻收到当前值** | 默认收不到历史值 |
+| 去重 | **自动**（用 equals） | 不去重 |
+| 用途 | **UI 状态** | **一次性事件**（Toast、导航） |
+
+<Callout type="warn" title="用 SharedFlow 而不是 StateFlow 表示事件">
+
+```kt
+// ❌ 用 StateFlow 表示「显示 Toast」：
+//    屏幕旋转后重新订阅，会再弹一次
+private val _toast = MutableStateFlow<String?>(null)
+
+// ✅ SharedFlow：事件只消费一次
+private val _events = MutableSharedFlow<UiEvent>()
+val events: SharedFlow<UiEvent> = _events.asSharedFlow()
+```
+
+判断标准：**「状态」可以被重复渲染，「事件」只该发生一次。**
+
+</Callout>
+
+## 7. Android 完整实战
+
+```kt
+class SearchViewModel(
+    private val repository: SearchRepository,
+) : ViewModel() {
+
+    private val query = MutableStateFlow("")
+
+    val results: StateFlow<List<Item>> = query
+        .debounce(300)                     // 防抖
+        .filter { it.length >= 2 }
+        .distinctUntilChanged()
+        .flatMapLatest { q ->              // 新查询取消上一个
+            repository.search(q)
+                .catch { emit(emptyList()) }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList(),
+        )
+
+    fun onQueryChange(q: String) { query.value = q }
+}
+```
+
+```kt
+// Fragment 里收集
+class SearchFragment : Fragment() {
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.results.collect { adapter.submitList(it) }
+            }
+        }
+    }
+}
+```
+
+<Callout type="warn" title="这两个 API 不是可选的">
+
+**`repeatOnLifecycle(STARTED)`**：页面进入后台时**停止收集**，
+回到前台时**重新收集**。不用它的话，后台页面仍在处理数据更新，
+白白消耗电量和 CPU。
+
+**`SharingStarted.WhileSubscribed(5_000)`**：没有订阅者 5 秒后停止上游 Flow。
+那 5 秒是为了扛过屏幕旋转——旋转时订阅者短暂消失，
+不加超时的话会触发一次不必要的重新查询。
+
+两者配合是 Android 官方推荐的标准写法。
+
+</Callout>
+
+## 8. Room + Flow
+
+```kt
+@Dao
+interface UserDao {
+    @Query("SELECT * FROM users")
+    fun observeAll(): Flow<List<User>>      // 数据变化时自动重新发射
+}
+
+class UserRepository(private val dao: UserDao, private val api: ApiService) {
+    val users: Flow<List<User>> = dao.observeAll()
+
+    suspend fun refresh() {
+        val fresh = api.getUsers()
+        dao.insertAll(fresh)                // 插入后 observeAll 自动发射新值
+    }
+}
+```
+
+这是**单一数据源** single source of truth 模式：
+UI 只观察数据库，网络请求只负责更新数据库。
+
+## 练习
+
+<Quiz
+  index={1}
+  question="Flow 默认是冷流，这意味着什么？"
+  options={[
+    '它运行在后台线程',
+    '每次 collect 都会重新执行一遍 builder 里的代码；没有收集者时什么都不做',
+    '它的数据会被缓存',
+    '它不能被取消',
+  ]}
+  answer={1}
+>
+
+**冷流**：Flow 只是一个「怎么产生数据」的描述，`collect` 才触发执行。
+两个收集者会各自跑一遍完整的生产逻辑，互不共享。
+
+对比**热流**（`StateFlow` / `SharedFlow`）：它们独立于收集者存在，
+有没有人收集都在那里，多个收集者共享同一份数据。
+
+实际影响：一个网络请求的冷 Flow 被 collect 两次 = 发两次请求。
+需要共享时用 `shareIn` / `stateIn` 把冷流转成热流。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      搜索联想场景（用户输入变化时取消上一次请求），该用哪个操作符？
+    </>
+  }
+  options={['flatMapConcat', 'flatMapMerge', 'flatMapLatest', 'map']}
+  answer={2}
+>
+
+`flatMapLatest`——**新值到来时取消上一个**内部 Flow，正是「取消上一次请求」的语义。
+
+三兄弟的区别：
+
+| 操作符 | 行为 | 场景 |
+| --- | --- | --- |
+| `flatMapLatest` | 新值取消旧的 | 搜索、筛选条件变化 |
+| `flatMapConcat` | 按顺序，等上一个完成 | 需要保序的串行请求 |
+| `flatMapMerge` | 并发，先完成先输出 | 批量独立请求 |
+
+配合 `debounce(300)` 使用效果最好：先防抖减少请求数，
+真发出去的请求再靠 `flatMapLatest` 保证只有最新的结果生效。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="StateFlow 和 SharedFlow 分别该用在什么地方？"
+  options={[
+    '随便用哪个都行',
+    'StateFlow 表示 UI 状态（可重复渲染），SharedFlow 表示一次性事件（Toast、导航）',
+    'StateFlow 用于网络，SharedFlow 用于数据库',
+    'SharedFlow 已废弃',
+  ]}
+  answer={1}
+>
+
+判断标准：**「状态」可以被重复渲染，「事件」只该发生一次。**
+
+- **StateFlow**：有初始值、有 `.value`、新订阅者立刻收到当前值、自动去重
+  → 适合 UI 状态。屏幕旋转后重新订阅会拿到当前状态并重新渲染，这正是期望行为。
+- **SharedFlow**：无初始值、默认不重放 → 适合一次性事件。
+
+用错的典型后果：用 `StateFlow` 表示「显示 Toast」，
+屏幕旋转后重新订阅会**再弹一次 Toast**。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      Fragment 里收集 Flow 为什么要用 <code>repeatOnLifecycle(STARTED)</code>？
+    </>
+  }
+  options={[
+    '为了性能优化，可选',
+    '页面进入后台时停止收集、回前台自动恢复；否则后台页面仍在处理更新，浪费资源',
+    '为了避免编译错误',
+    '为了支持多线程',
+  ]}
+  answer={1}
+>
+
+不用它的话，`lifecycleScope.launch { flow.collect { } }` 会**一直收集**
+直到 Fragment 销毁——包括页面被完全遮挡、用户已经切到别的 App 的时候。
+
+后果是后台页面仍在解析数据、更新不可见的 View，白白消耗 CPU 和电量；
+如果上游是网络轮询，还会持续发请求。
+
+`repeatOnLifecycle(STARTED)` 在页面进入 `STARTED` 时启动收集，
+低于该状态时**取消**协程，回到前台再重新启动。
+
+配套的还有 `SharingStarted.WhileSubscribed(5_000)`——那 5 秒超时是为了
+扛过屏幕旋转导致的短暂无订阅者，避免触发不必要的重新查询。
+
+</Quiz>
 
 ## 官方参考
 

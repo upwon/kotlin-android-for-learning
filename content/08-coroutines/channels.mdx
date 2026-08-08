@@ -1,19 +1,369 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.7 通道 Channel」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+`Channel` 是协程之间的**通信管道**——类似 `BlockingQueue`，但**挂起而不阻塞线程**。
+不过在 Android 业务代码里，你大概率应该用 `Flow` 而不是它。这一课讲清楚边界。
+
+## 1. 基本用法
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+fun main() = runBlocking {
+    val channel = Channel<Int>()
+
+    launch {
+        for (i in 1..3) {
+            println("发送 $i")
+            channel.send(i)          // 没有接收者时挂起
+        }
+        channel.close()              // 必须关闭，否则接收方永远等待
+    }
+
+    for (value in channel) {         // 遍历直到 channel 关闭
+        println("  接收 $value")
+        delay(100)
+    }
+    println("完成")
+}
+```
+
+<Callout type="warn" title="忘记 close 会导致接收方永远挂起">
+
+`for (value in channel)` 会一直等待，直到 channel 被关闭。
+生产者异常退出而没有 `close()`，消费者就永远卡住。
+
+用 `produce { }` 可以自动处理关闭：
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+fun main() = runBlocking {
+    val channel = produce {          // 协程结束时自动 close
+        for (i in 1..3) send(i)
+    }
+    for (v in channel) print("$v ")
+}
+```
+
 </Callout>
 
-## 学习提纲
+## 2. 容量策略
 
-- Channel 的容量策略
-- produce / actor
-- Channel 与 Flow 的选择
-- 扇入扇出
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
 
-## 与 Java / Android 的关键差异
+fun main() = runBlocking {
+    // RENDEZVOUS（默认，容量 0）：send 必须等到有人 receive
+    val rendezvous = Channel<Int>()
 
-类似 BlockingQueue，但挂起而不阻塞线程。
+    // BUFFERED：有缓冲区，满了才挂起
+    val buffered = Channel<Int>(capacity = 3)
+
+    // CONFLATED：只保留最新的一个，旧的被丢弃
+    val conflated = Channel<Int>(Channel.CONFLATED)
+    conflated.send(1)
+    conflated.send(2)
+    conflated.send(3)
+    println("conflated 收到：${conflated.receive()}")   // 3
+
+    // UNLIMITED：无限缓冲，send 永不挂起
+    val unlimited = Channel<Int>(Channel.UNLIMITED)
+    repeat(1000) { unlimited.send(it) }
+    println("unlimited 缓冲了 1000 个，send 没有挂起")
+
+    buffered.close(); rendezvous.close(); unlimited.close()
+}
+```
+
+| 容量 | 行为 | 风险 |
+| --- | --- | --- |
+| `RENDEZVOUS`（0，默认） | 收发必须同时就绪 | 强同步 |
+| `BUFFERED`（默认 64） | 缓冲满了才挂起 | — |
+| `CONFLATED` | 只保留最新值 | 会丢数据（有时正是想要的） |
+| `UNLIMITED` | 永不挂起 | ⚠️ **可能 OOM** |
+
+<Callout type="warn">
+
+`UNLIMITED` 看起来很省事，但它把背压问题藏起来了——
+生产者比消费者快时，缓冲区会无限增长直到 OOM。
+
+除非你能证明数据量有上界，否则别用。
+
+</Callout>
+
+## 3. 扇出与扇入
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+fun main() = runBlocking {
+    // 扇出 fan-out：多个消费者从同一个 channel 取
+    val tasks = produce { repeat(6) { send(it) } }
+
+    val workers = List(3) { id ->
+        launch {
+            for (task in tasks) {
+                delay(50)
+                println("worker$id 处理任务 $task")
+            }
+        }
+    }
+    workers.joinAll()
+
+    println("---")
+
+    // 扇入 fan-in：多个生产者往同一个 channel 发
+    val results = Channel<String>()
+    launch { repeat(2) { delay(30); results.send("A$it") } }
+    launch { repeat(2) { delay(50); results.send("B$it") } }
+
+    repeat(4) { println(results.receive()) }
+    results.close()
+}
+```
+
+<Callout type="tip">
+
+扇出是 Channel 相对 Flow 的**独有能力**：多个消费者**瓜分**数据
+（每条数据只被一个消费者处理）。
+
+Flow 的多个收集者是各自拿到**完整的一份**，语义完全不同。
+
+需要「任务队列 + 多个 worker」时，Channel 是对的工具。
+
+</Callout>
+
+## 4. Channel vs Flow
+
+| | `Channel` | `Flow` |
+| --- | --- | --- |
+| 冷/热 | **热**（独立于消费者存在） | 默认**冷** |
+| 多消费者 | **瓜分**数据 | 各自拿完整一份 |
+| 需要手动关闭 | ✅ | ❌ |
+| 操作符 | 很少 | 丰富（map/filter/debounce…） |
+| 数据丢失风险 | 没有消费者时数据积压或丢弃 | 冷流不会丢 |
+
+<Callout type="success" title="选择依据">
+
+**默认用 Flow。** 只有这三种情况用 Channel：
+
+1. **任务队列 + 多 worker 瓜分**（扇出）
+2. **两个协程之间点对点通信**
+3. **需要热的、有缓冲的管道**，且 `SharedFlow` 的语义不合适
+
+Android 业务代码里，前两种都不常见。绝大多数「数据流」需求用 Flow 更好——
+操作符丰富，不用管关闭，冷流语义也更安全。
+
+</Callout>
+
+## 5. Android 上曾经的 Channel 用法：一次性事件
+
+```kt
+// 老写法：用 Channel 表示一次性 UI 事件
+class MyViewModel : ViewModel() {
+    private val _events = Channel<UiEvent>()
+    val events = _events.receiveAsFlow()     // 转成 Flow 给 UI 收集
+
+    fun onSubmit() {
+        viewModelScope.launch {
+            _events.send(UiEvent.ShowToast("提交成功"))
+        }
+    }
+}
+```
+
+<Callout type="warn" title="这个模式现在有更好的替代">
+
+`Channel` 做事件的优点是**保证不丢**（没有订阅者时会缓冲），
+缺点是语义微妙：如果有多个收集者，事件会被瓜分而不是广播。
+
+现在的推荐做法：
+
+```kt
+// 方式 1：SharedFlow（多数场景够用）
+private val _events = MutableSharedFlow<UiEvent>()
+val events: SharedFlow<UiEvent> = _events.asSharedFlow()
+
+// 方式 2：把事件放进 State，消费后清除（最可靠）
+data class UiState(
+    val data: List<Item> = emptyList(),
+    val toastMessage: String? = null,
+)
+fun onToastShown() { _state.update { it.copy(toastMessage = null) } }
+```
+
+方式 2 虽然啰嗦，但它让事件也是**状态的一部分**，
+屏幕旋转、进程重建都能正确处理。Google 现在推荐这一种。
+
+</Callout>
+
+## 6. actor：用 Channel 保护共享状态
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+sealed interface CounterMsg {
+    data object Increment : CounterMsg
+    data class Get(val response: CompletableDeferred<Int>) : CounterMsg
+}
+
+@OptIn(ObsoleteCoroutinesApi::class)
+fun CoroutineScope.counterActor() = actor<CounterMsg> {
+    var counter = 0                       // 状态封闭在这个协程里，天然线程安全
+    for (msg in channel) {
+        when (msg) {
+            CounterMsg.Increment -> counter++
+            is CounterMsg.Get -> msg.response.complete(counter)
+        }
+    }
+}
+
+fun main() = runBlocking {
+    val actor = counterActor()
+
+    repeat(1000) { launch { actor.send(CounterMsg.Increment) } }
+    delay(200)
+
+    val response = CompletableDeferred<Int>()
+    actor.send(CounterMsg.Get(response))
+    println("计数 = ${response.await()}")
+
+    actor.close()
+}
+```
+
+<Callout type="tip">
+
+`actor` 的思路是：**把可变状态关进一个协程里，外部只能发消息**。
+所有修改都串行执行，不需要任何锁。
+
+这是 Erlang/Akka 的 actor 模型。API 目前标记为 `@ObsoleteCoroutinesApi`
+（等待重新设计），但思路仍然值得知道——
+[8.9 共享状态](/docs/08-coroutines/shared-mutable-state)里的
+「限定在单线程」本质上是同一个思路。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question="Channel 和 Flow 在「多个消费者」时的行为区别是什么？"
+  options={[
+    '没有区别',
+    'Channel 的多个消费者瓜分数据（每条只被一个处理）；Flow 的多个收集者各自拿到完整一份',
+    'Flow 不支持多个收集者',
+    'Channel 只能有一个消费者',
+  ]}
+  answer={1}
+>
+
+这是两者最本质的语义差异：
+
+- **Channel**（扇出）：一条数据只会被**一个**消费者拿到。
+  适合「任务队列 + 多 worker」——3 个 worker 分摊 6 个任务。
+- **Flow**：每个收集者独立执行一遍上游（冷流）或共享广播（热流），
+  都是拿到**完整**的数据序列。
+
+所以「需要多个 worker 并行处理一批任务」时用 Channel，
+「需要多处观察同一份数据」时用 Flow。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      忘记调用 <code>channel.close()</code> 会怎样？
+    </>
+  }
+  options={[
+    '自动关闭',
+    '用 for 循环接收的消费者会永远挂起等待',
+    '抛异常',
+    '内存泄漏但不影响功能',
+  ]}
+  answer={1}
+>
+
+`for (v in channel)` 的终止条件就是 channel 被关闭。不 `close()`，
+消费者会一直挂起等待下一个元素——协程永远不会完成。
+
+如果这个协程在 `coroutineScope` 里，整个作用域也会永远不返回。
+
+两个解法：
+
+1. 用 `produce { }` 构建器——协程正常结束或异常时**自动 close**
+2. 手动 `close()` 时放进 `try/finally`，保证异常路径也会关
+
+这也是 Flow 更省心的一个原因：它没有「关闭」这个概念，
+生产者协程结束流就结束了。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>Channel(Channel.UNLIMITED)</code> 有什么风险？
+    </>
+  }
+  options={[
+    '性能差',
+    '生产者比消费者快时缓冲区无限增长，可能 OOM',
+    '会丢数据',
+    '不能关闭',
+  ]}
+  answer={1}
+>
+
+`UNLIMITED` 让 `send` **永不挂起**——这等于**取消了背压**。
+
+生产者比消费者快时，未消费的数据在内存里无限堆积，最终 OOM。
+而且这个问题在测试时往往不会暴露（数据量小），只在线上高负载时爆发。
+
+其他容量策略：
+
+- `RENDEZVOUS`（默认，0）：收发必须同时就绪，最强的背压
+- `BUFFERED`（64）：有限缓冲，满了挂起
+- `CONFLATED`：只保留最新值，主动丢弃旧数据（UI 场景常用）
+
+除非能证明数据量有明确上界，否则别用 `UNLIMITED`。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="Android 上表示一次性 UI 事件（Toast、导航），现在推荐用什么？"
+  options={[
+    'Channel + receiveAsFlow',
+    'StateFlow',
+    'SharedFlow，或者把事件作为 State 的一部分、消费后清除',
+    'LiveData',
+  ]}
+  answer={2}
+>
+
+两种都是当前推荐的做法：
+
+- **SharedFlow**：多数场景够用，语义清晰（广播、不重放）
+- **事件作为 State 的一部分**：Google 目前更推荐的做法
+
+```
+data class UiState(val data: List<Item>, val toastMessage: String? = null)
+fun onToastShown() { _state.update { it.copy(toastMessage = null) } }
+```
+
+后者啰嗦一些，但它让事件也是**状态的一部分**——屏幕旋转、进程被杀后重建，
+都能正确恢复和处理，不会丢事件也不会重复弹。
+
+`Channel + receiveAsFlow` 是老写法，能保证不丢，但多收集者时事件会被瓜分，
+语义微妙。`StateFlow` 更不行——旋转后重新订阅会重复触发。
+
+</Quiz>
 
 ## 官方参考
 

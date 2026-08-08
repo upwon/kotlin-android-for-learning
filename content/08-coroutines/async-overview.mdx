@@ -1,21 +1,333 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.1 异步编程技术概览」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+在写第一行 `launch` 之前，先把「协程到底解决了什么问题」搞清楚。
+这一课不讲 API，讲的是 Android 异步方案的演进和协程在其中的位置。
+
+## 1. Android 异步的演进
+
+| 时代 | 方案 | 问题 |
+| --- | --- | --- |
+| 2008~ | `Thread` + `Handler` | 样板多，生命周期要手动管，泄漏频发 |
+| 2009~ | `AsyncTask` | 生命周期不安全，配置变更后崩溃，API 30 已废弃 |
+| 2014~ | `RxJava` | 功能强但学习曲线陡，操作符 200+，调试栈难读 |
+| 2018~ | **协程** | 官方推荐，语法接近同步，结构化并发 |
+
+## 2. 回调地狱
+
+```kt
+// 三层嵌套：登录 → 拿用户信息 → 拿订单
+login(username, password) { token ->
+    getUserInfo(token) { user ->
+        getOrders(user.id) { orders ->
+            runOnUiThread { showOrders(orders) }
+        }
+    }
+}
+```
+
+问题不只是「难看」：
+
+- **错误处理无处安放**——每层都要单独传 `onError`
+- **无法取消**——页面关了，三层回调还在跑
+- **执行顺序不可见**——控制流藏在缩进里
+
+## 3. 协程的写法
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun login(): String {
+    delay(100)
+    return "token123"
+}
+
+suspend fun getUserInfo(token: String): String {
+    delay(100)
+    return "user@$token"
+}
+
+suspend fun getOrders(user: String): List<String> {
+    delay(100)
+    return listOf("订单A", "订单B")
+}
+
+fun main() = runBlocking {
+    // 顺着从上往下读，没有回调
+    val token = login()
+    val user = getUserInfo(token)
+    val orders = getOrders(user)
+    println("$user 有 ${orders.size} 个订单")
+}
+```
+
+<Callout type="success">
+
+三行顺序代码，但**每一行都是异步的**——`login()` 挂起时，线程被释放去干别的，
+返回后从挂起点继续。
+
+而且 try/catch 能正常工作，取消由作用域统一处理。
+
 </Callout>
 
-## 学习提纲
+## 4. 协程不是线程
 
-- Android 上异步方案的演进：AsyncTask / Handler / RxJava / 协程
-- 回调地狱与「用同步的写法做异步的事」
-- 协程不是线程：它是可挂起的计算
-- 为什么 Android 官方全面转向协程
+这是最需要建立的直觉。
 
-## 与 Java / Android 的关键差异
+```kotlin
+import kotlinx.coroutines.*
 
-协程解决的是 CompletableFuture / RxJava 想解决的同一批问题，但写法是顺序的。
+fun main() = runBlocking {
+    val start = System.currentTimeMillis()
+
+    // 启动 10 万个协程
+    val jobs = List(100_000) {
+        launch(Dispatchers.Default) {
+            delay(100)
+        }
+    }
+    jobs.joinAll()
+
+    println("10 万个协程耗时 ${System.currentTimeMillis() - start}ms")
+    println("如果是 10 万个线程，早就 OOM 了")
+}
+```
+
+<Callout type="tip" title="协程 = 可挂起的计算">
+
+| | 线程 | 协程 |
+| --- | --- | --- |
+| 创建成本 | ~1MB 栈内存 | 几十字节的对象 |
+| 数量级 | 几百 | **几十万** |
+| 阻塞代价 | 整个线程被占住 | **只是挂起，线程可以去干别的** |
+| 调度 | 操作系统内核 | 用户态，由库调度 |
+
+关键在最后两行：`delay(100)` **不阻塞线程**，它把协程挂起、
+把线程还回线程池，100ms 后再找个线程继续执行。
+
+`Thread.sleep(100)` 则是实打实占着线程什么都不干。
+
+</Callout>
+
+## 5. suspend 的本质：CPS 变换
+
+```kt
+// 你写的
+suspend fun getUser(id: String): User
+
+// 编译后大致等价于（CPS，continuation-passing style）
+fun getUser(id: String, continuation: Continuation<User>): Any
+```
+
+编译器把挂起函数改写成**状态机**：每个挂起点是一个状态，
+`Continuation` 记录「从哪里继续」。
+
+<Callout type="warn" title="所以 suspend 函数只能被 suspend 函数或协程调用">
+
+因为调用方需要提供那个 `Continuation`。普通函数没有它。
+
+这也解释了 `suspend` 的传染性：一个函数变成 `suspend`，
+它的所有调用者要么也是 `suspend`，要么得起一个协程。
+
+**这个传染性是好事**——它在类型层面标记出了「这个调用可能耗时」。
+
+</Callout>
+
+## 6. 结构化并发：真正的杀手锏
+
+这是协程相对 RxJava、CompletableFuture 最大的优势。
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    try {
+        coroutineScope {              // 作用域：所有子协程完成才返回
+            launch {
+                delay(50)
+                println("子任务 1 完成")
+            }
+            launch {
+                delay(100)
+                throw RuntimeException("子任务 2 失败")
+            }
+            launch {
+                delay(200)
+                println("子任务 3 —— 不会执行到这里")
+            }
+        }
+    } catch (e: Exception) {
+        println("捕获：${e.message}")
+    }
+    println("所有子协程都已结束，没有泄漏")
+}
+```
+
+<Callout type="success" title="结构化并发的三条保证">
+
+1. **父协程等待所有子协程完成**——不会有「孤儿任务」
+2. **子协程失败会取消兄弟协程并通知父协程**——不会有「一半成功一半在跑」
+3. **父协程取消会取消所有子协程**——页面关闭时所有请求自动取消
+
+这三条在 RxJava 里要靠 `CompositeDisposable` 手动维护，
+忘记 `dispose()` 就是泄漏。协程把它做成了语言层面的保证。
+
+</Callout>
+
+Android 上的直接体现：
+
+```kt
+class MyViewModel : ViewModel() {
+    fun load() {
+        viewModelScope.launch {      // ViewModel 销毁时自动取消
+            val data = repository.fetch()
+            _state.value = data
+        }
+    }
+}
+
+class MyFragment : Fragment() {
+    override fun onViewCreated(...) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {   // 只在可见时收集
+                viewModel.state.collect { render(it) }
+            }
+        }
+    }
+}
+```
+
+**你不需要写任何取消代码**——这就是官方全面转向协程的原因。
+
+## 7. 与 RxJava 的对照
+
+| 概念 | RxJava | 协程 |
+| --- | --- | --- |
+| 单个异步值 | `Single<T>` | `suspend fun(): T` |
+| 数据流 | `Observable<T>` / `Flowable<T>` | `Flow<T>` |
+| 线程切换 | `subscribeOn` / `observeOn` | `withContext(Dispatcher)` |
+| 取消 | `Disposable.dispose()` | 作用域自动 |
+| 错误处理 | `onError` 回调 | 普通 `try/catch` |
+| 组合 | `zip` / `flatMap` | `async` / `await` 或直接顺序写 |
+
+<Callout type="tip">
+
+不需要为了「跟上潮流」而重写现有的 RxJava 代码。
+两者可以共存（`rxSingle { }`、`Single.await()` 提供互转）。
+
+新代码用协程，老代码在重构时顺手迁移，是更现实的路径。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question="「协程不是线程」这句话最核心的含义是什么？"
+  options={[
+    '协程比线程快',
+    '协程是可挂起的计算：挂起时释放线程而不是阻塞它，所以能创建几十万个',
+    '协程不需要 CPU',
+    '协程只能在主线程运行',
+  ]}
+  answer={1}
+>
+
+关键在**挂起 ≠ 阻塞**。
+
+`delay(100)` 会把协程的执行状态保存下来、**把线程还给线程池**，
+100ms 后再找一个线程从挂起点继续。整个过程中没有线程被占用。
+
+`Thread.sleep(100)` 则是实打实占着一个线程什么也不干。
+
+由此带来的量级差异：一个线程约 1MB 栈内存，几百个就到顶；
+一个协程只是几十字节的对象，几十万个毫无压力。
+
+调度也从内核态（线程切换）变成了用户态（库调度），开销小得多。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么 <code>suspend</code> 函数只能在协程或其他 <code>suspend</code> 函数中调用？
+    </>
+  }
+  options={[
+    '语法限制，没有实际原因',
+    '编译器把它改写成了接收 Continuation 参数的状态机，调用方必须提供这个 Continuation',
+    '因为它一定会阻塞线程',
+    '为了性能',
+  ]}
+  answer={1}
+>
+
+`suspend` 函数经过 **CPS 变换**（continuation-passing style）：
+
+```
+suspend fun getUser(id: String): User
+// 编译成
+fun getUser(id: String, continuation: Continuation<User>): Any
+```
+
+编译器把函数体拆成状态机，每个挂起点是一个状态，`Continuation`
+记录「恢复后从哪里继续」。调用方必须提供这个 `Continuation`，
+而普通函数手里没有。
+
+这带来了 `suspend` 的**传染性**——调用者要么也是 suspend，要么得起一个协程。
+这其实是优点：它在类型签名上标记出了「这个调用可能耗时/会挂起」。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="结构化并发提供的三条保证是什么？"
+  options={[
+    '更快、更省内存、更简单',
+    '父等待所有子完成；子失败取消兄弟并通知父；父取消则取消所有子',
+    '自动重试、自动缓存、自动降级',
+    '线程安全、内存安全、类型安全',
+  ]}
+  answer={1}
+>
+
+这三条是协程相对 RxJava / CompletableFuture 的核心优势：
+
+1. **父等子**——`coroutineScope` 块要等所有子协程完成才返回，不会有孤儿任务
+2. **失败传播**——一个子协程失败，兄弟协程被取消，异常传给父协程，
+   不会留下「一半成功一半还在跑」的中间态
+3. **取消传播**——父协程取消时所有子协程自动取消
+
+Android 上的直接收益：`viewModelScope.launch { }` 里的所有请求，
+在 ViewModel 销毁时自动取消，**你一行取消代码都不用写**。
+
+RxJava 里这要靠 `CompositeDisposable` 手动维护，忘记 `dispose()` 就泄漏。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="回调地狱除了「代码难看」，还有哪个更本质的问题？"
+  options={[
+    '性能差',
+    '错误处理和取消都无处安放：每层要单独传 onError，页面关闭后回调仍在执行',
+    '占用内存多',
+    '不支持多线程',
+  ]}
+  answer={1}
+>
+
+缩进只是表象。真正的问题是**控制流被打散了**：
+
+- **错误处理**：没有统一的 catch 点，每层回调都要单独接一个 `onError`，
+  而且很容易某一层忘了传
+- **取消**：Activity 已经销毁，三层嵌套的回调还在依次执行，
+  最后往一个已死的 View 上设值 → 崩溃或泄漏
+- **执行顺序不可见**：想知道「谁先谁后」得顺着缩进一层层读
+
+协程把这三件事同时解决了：顺序代码 + 普通 try/catch + 作用域自动取消。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[async-programming](https://book.kotlincn.net/text/async-programming.html)
-- 官方英文：[async-programming](https://kotlinlang.org/docs/async-programming.html)
+- 官方英文：[async-programming](https://kotlinlang.org/docs/async-programming.html) ／ [coroutines-guide](https://kotlinlang.org/docs/coroutines-guide.html)

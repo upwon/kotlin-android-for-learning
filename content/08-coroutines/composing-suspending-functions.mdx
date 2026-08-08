@@ -1,19 +1,404 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.4 组合挂起函数」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一课解决一个很具体的问题：**两个独立的网络请求，怎么并发发起再合并结果？**
+顺带讲清楚「默认是顺序执行」这个容易被忽略的事实。
+
+## 1. 默认是顺序的
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlin.system.measureTimeMillis
+
+suspend fun fetchUser(): String {
+    delay(300)
+    return "Summer"
+}
+
+suspend fun fetchOrders(): List<String> {
+    delay(500)
+    return listOf("A", "B")
+}
+
+fun main() = runBlocking {
+    val time = measureTimeMillis {
+        val user = fetchUser()          // 等 300ms
+        val orders = fetchOrders()      // 再等 500ms
+        println("$user ${orders.size}")
+    }
+    println("顺序执行：${time}ms")
+}
+```
+
+<Callout type="warn">
+
+**挂起函数不会自动并发。** 写在同一个协程里的两个 `suspend` 调用是顺序执行的，
+和普通函数调用一样——这是有意的设计，让代码可以按直觉从上往下读。
+
+想并发必须显式表达。
+
 </Callout>
 
-## 学习提纲
+## 2. async 并发
 
-- 默认顺序执行
-- async 并发与 awaitAll
-- 惰性启动 CoroutineStart.LAZY
-- async 的结构化并发语义
+```kotlin
+import kotlinx.coroutines.*
+import kotlin.system.measureTimeMillis
 
-## 与 Java / Android 的关键差异
+suspend fun fetchUser(): String { delay(300); return "Summer" }
+suspend fun fetchOrders(): List<String> { delay(500); return listOf("A", "B") }
 
-两个网络请求并发再合并，是 async/await 最典型的收益场景。
+fun main() = runBlocking {
+    val time = measureTimeMillis {
+        val user = async { fetchUser() }        // 立刻开始
+        val orders = async { fetchOrders() }    // 也立刻开始
+
+        println("${user.await()} ${orders.await().size}")   // 在这里汇合
+    }
+    println("并发执行：${time}ms（约等于较慢的那个）")
+}
+```
+
+<Callout type="success" title="关键在「什么时候开始」和「什么时候等」">
+
+`async { }` **立刻**启动协程并返回 `Deferred`，不阻塞。
+`await()` 才是等待点。
+
+所以要让两个请求真正并发，必须**先都 `async`，再统一 `await`**：
+
+```kt
+// ❌ 这样还是顺序的！
+val user = async { fetchUser() }.await()      // 立刻 await 了
+val orders = async { fetchOrders() }.await()
+
+// ✅ 先启动，后等待
+val userD = async { fetchUser() }
+val ordersD = async { fetchOrders() }
+val user = userD.await()
+val orders = ordersD.await()
+```
+
+</Callout>
+
+## 3. awaitAll：批量等待
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun fetchPage(n: Int): String {
+    delay((100 * n).toLong())
+    return "第 $n 页"
+}
+
+fun main() = runBlocking {
+    val pages = (1..5).map { async { fetchPage(it) } }
+    println(pages.awaitAll())
+
+    // 等价的手写版
+    val results = (1..3).map { async { fetchPage(it) } }.map { it.await() }
+    println(results)
+}
+```
+
+`awaitAll` 比逐个 `await` 好：**任何一个失败会立刻抛出**，不用等前面的都完成。
+
+## 4. 惰性启动
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlin.system.measureTimeMillis
+
+suspend fun compute(n: Int): Int { delay(200); return n * n }
+
+fun main() = runBlocking {
+    val time = measureTimeMillis {
+        val a = async(start = CoroutineStart.LAZY) { compute(2) }
+        val b = async(start = CoroutineStart.LAZY) { compute(3) }
+
+        a.start()          // 显式启动
+        b.start()
+
+        println("${a.await()} ${b.await()}")
+    }
+    println("${time}ms")
+}
+```
+
+<Callout type="warn" title="LAZY 不调用 start() 就等于顺序执行">
+
+```kt
+val a = async(start = CoroutineStart.LAZY) { compute(2) }
+val b = async(start = CoroutineStart.LAZY) { compute(3) }
+println(a.await() + b.await())    // await 会触发 start，但是逐个的 → 顺序执行
+```
+
+`LAZY` 的实际用途很窄：「先创建好，可能根本不用」的场景。
+日常并发请求**不要用 LAZY**，默认的 `CoroutineStart.DEFAULT` 才是你要的。
+
+</Callout>
+
+## 5. 结构化并发的语义
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun loadAll(): String = coroutineScope {
+    val a = async { delay(100); "A" }
+    val b = async<String> { delay(50); throw RuntimeException("B 失败") }
+    "${a.await()} ${b.await()}"
+}
+
+fun main() = runBlocking {
+    try {
+        println(loadAll())
+    } catch (e: Exception) {
+        println("捕获：${e.message}")
+    }
+    println("A 也被取消了，没有泄漏的协程")
+}
+```
+
+<Callout type="success">
+
+在 `coroutineScope` 里，一个 `async` 失败会：
+
+1. 取消所有兄弟协程
+2. 取消整个作用域
+3. 把异常抛给 `coroutineScope` 的调用方
+
+这正是你想要的「要么全成功、要么干净地全失败」。
+
+如果希望**部分失败不影响其他**，用 `supervisorScope`（见
+[8.8 异常处理](/docs/08-coroutines/exception-handling)）。
+
+</Callout>
+
+## 6. 并发数量控制
+
+请求太多时需要限流：
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+suspend fun fetchItem(id: Int): String {
+    delay(100)
+    return "item$id"
+}
+
+fun main() = runBlocking {
+    val semaphore = Semaphore(3)         // 最多 3 个并发
+
+    val results = (1..10).map { id ->
+        async {
+            semaphore.withPermit {
+                fetchItem(id)
+            }
+        }
+    }.awaitAll()
+
+    println(results)
+}
+```
+
+Android 上更常见的是用 `chunked` 分批：
+
+```kt
+ids.chunked(20).flatMap { batch ->
+    batch.map { async { api.fetch(it) } }.awaitAll()
+}
+```
+
+## 7. Android 实战
+
+```kt
+class DetailViewModel(
+    private val repo: Repository,
+) : ViewModel() {
+
+    fun load(id: String) {
+        viewModelScope.launch {
+            _state.value = UiState.Loading
+            try {
+                // 三个独立请求并发
+                val detail = async { repo.getDetail(id) }
+                val comments = async { repo.getComments(id) }
+                val related = async { repo.getRelated(id) }
+
+                _state.value = UiState.Success(
+                    detail = detail.await(),
+                    comments = comments.await(),
+                    related = related.await(),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = UiState.Error(e.message)
+            }
+        }
+    }
+}
+```
+
+<Callout type="tip" title="允许部分失败的写法">
+
+上面的写法是「任何一个失败，整体就失败」。
+如果次要数据（比如「相关推荐」）失败不该影响主内容：
+
+```kt
+val detail = async { repo.getDetail(id) }
+val related = async {
+    runCatching { repo.getRelated(id) }.getOrDefault(emptyList())
+}
+```
+
+注意 `runCatching` 会吞 `CancellationException`——这里因为紧接着就
+`await`，取消仍会通过 `Deferred` 传播，所以可接受。
+但更严谨的写法是显式 try/catch 并重抛 `CancellationException`。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>val a = async {'{'} f() {'}'}.await(); val b = async {'{'} g() {'}'}.await()</code>
+      <br />
+      这样写是并发的吗？
+    </>
+  }
+  options={[
+    '是并发的',
+    '不是，第一个 await 立刻等待完成，所以仍是顺序执行',
+    '取决于 Dispatcher',
+    '编译错误',
+  ]}
+  answer={1}
+>
+
+**不是并发**。`async` 确实立刻启动了协程，但紧跟的 `.await()` 立刻就在等它完成——
+`g()` 要等 `f()` 结束后才开始。
+
+正确写法是**先全部启动，再统一等待**：
+
+```
+val aD = async { f() }
+val bD = async { g() }
+val a = aD.await()
+val b = bD.await()
+```
+
+或者用 `awaitAll`：
+
+```
+val (a, b) = listOf(async { f() }, async { g() }).awaitAll()
+```
+
+记住口诀：**`async` 是「开始」，`await` 是「汇合」，两者要拉开距离。**
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>coroutineScope</code> 里一个 <code>async</code> 抛异常，其他兄弟协程会怎样？
+    </>
+  }
+  options={[
+    '继续执行',
+    '被取消，整个作用域取消，异常抛给 coroutineScope 的调用方',
+    '不受影响，但结果丢失',
+    '会重试',
+  ]}
+  answer={1}
+>
+
+`coroutineScope` 遵循结构化并发：一个子协程失败 →
+**取消所有兄弟** → 取消作用域 → 异常抛给调用方。
+
+这是「要么全成功、要么干净地全失败」的语义，避免了「一半数据到了一半还在跑」
+的中间态。
+
+需要「部分失败不影响其他」时用 `supervisorScope`，
+或者给单个 `async` 内部加 try/catch 提供降级值：
+
+```
+val related = async {
+    try { repo.getRelated(id) }
+    catch (e: CancellationException) { throw e }
+    catch (e: Exception) { emptyList() }
+}
+```
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>CoroutineStart.LAZY</code> 的 async，如果只调用 <code>await()</code> 不调用 <code>start()</code>，会怎样？
+    </>
+  }
+  options={[
+    '永远不执行，死锁',
+    'await() 会触发启动，但多个 LAZY 协程逐个 await 就变成了顺序执行',
+    '抛异常',
+    '和默认行为一样',
+  ]}
+  answer={1}
+>
+
+`await()` 确实会触发启动，所以不会死锁。但如果有多个 LAZY 协程：
+
+```
+val a = async(start = LAZY) { f() }
+val b = async(start = LAZY) { g() }
+a.await() + b.await()      // a 启动并跑完，b 才启动 → 顺序执行
+```
+
+**并发效果没了**，这通常不是你想要的。
+
+`LAZY` 的适用场景很窄：「先把协程创建好，但可能根本用不上」。
+日常并发请求一律用默认的 `CoroutineStart.DEFAULT`。
+
+真需要 LAZY 时，记得显式调用 `start()` 让它们都跑起来，再统一 `await`。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="fill"
+  question="有 10 个请求要发，但最多允许 3 个并发，用什么控制？"
+  answer={['Semaphore(3)', 'kotlinx.coroutines.sync.Semaphore(3) + withPermit']}
+>
+
+`Semaphore(3)` + `withPermit`：
+
+```
+val semaphore = Semaphore(3)
+val results = (1..10).map { id ->
+    async {
+        semaphore.withPermit { fetchItem(id) }
+    }
+}.awaitAll()
+```
+
+注意用的是 `kotlinx.coroutines.sync.Semaphore`（挂起，不阻塞线程），
+不是 `java.util.concurrent.Semaphore`（会阻塞线程）。
+
+另一种更简单的思路是**分批**：
+
+```
+ids.chunked(3).flatMap { batch ->
+    batch.map { async { api.fetch(it) } }.awaitAll()
+}
+```
+
+区别是：`Semaphore` 保持始终 3 个在跑；`chunked` 是一批全部完成才开下一批。
+前者吞吐更好，后者实现更简单。
+
+</Quiz>
 
 ## 官方参考
 

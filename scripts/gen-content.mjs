@@ -685,6 +685,7 @@ const parts = [
         ],
         javaNote: '协程解决的是 CompletableFuture / RxJava 想解决的同一批问题，但写法是顺序的。',
         official: 'async-programming',
+        deep: true,
       },
       {
         num: '8.2',
@@ -701,6 +702,7 @@ const parts = [
         javaNote: '协程的核心不是并发原语，而是结构化并发带来的生命周期管理。',
         official: 'coroutines-basics',
         star: true,
+        deep: true,
       },
       {
         num: '8.3',
@@ -716,6 +718,7 @@ const parts = [
         ],
         javaNote: '和 Thread.interrupt 类似是协作式的，但结构化并发让取消可以沿树传播。',
         official: 'cancellation-and-timeouts',
+        deep: true,
       },
       {
         num: '8.4',
@@ -725,6 +728,7 @@ const parts = [
         outline: ['默认顺序执行', 'async 并发与 awaitAll', '惰性启动 CoroutineStart.LAZY', 'async 的结构化并发语义'],
         javaNote: '两个网络请求并发再合并，是 async/await 最典型的收益场景。',
         official: 'composing-suspending-functions',
+        deep: true,
       },
       {
         num: '8.5',
@@ -741,6 +745,7 @@ const parts = [
         javaNote: '取代 Handler/Looper 与线程池的显式管理，但线程模型仍需心里有数。',
         official: 'coroutine-context-and-dispatchers',
         star: true,
+        deep: true,
       },
       {
         num: '8.6',
@@ -757,6 +762,7 @@ const parts = [
         javaNote: 'RxJava 的 Observable 对位，但取消与线程切换由协程上下文统一管理。',
         official: 'flow',
         star: true,
+        deep: true,
       },
       {
         num: '8.7',
@@ -766,6 +772,7 @@ const parts = [
         outline: ['Channel 的容量策略', 'produce / actor', 'Channel 与 Flow 的选择', '扇入扇出'],
         javaNote: '类似 BlockingQueue，但挂起而不阻塞线程。',
         official: 'channels',
+        deep: true,
       },
       {
         num: '8.8',
@@ -782,6 +789,7 @@ const parts = [
         javaNote: '最反直觉的一章：try/catch 包住 launch 是抓不到异常的。',
         official: 'exception-handling',
         star: true,
+        deep: true,
       },
       {
         num: '8.9',
@@ -791,6 +799,7 @@ const parts = [
         outline: ['问题复现：多协程修改同一变量', 'Mutex 与 withLock', '限定在单线程上下文中', '原子类与不可变数据的取舍'],
         javaNote: 'synchronized 会阻塞线程，协程里应该用 Mutex。',
         official: 'shared-mutable-state',
+        deep: true,
       },
     ],
   },

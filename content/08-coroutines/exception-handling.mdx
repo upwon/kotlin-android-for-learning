@@ -1,20 +1,455 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.8 异常处理」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这是协程里**最反直觉**的一章。核心结论先给：
+**`try { launch { ... } } catch` 是抓不到异常的**，
+而 `async` 的异常要到 `await()` 才抛。搞不清这两条会写出「异常莫名其妙没了」的代码。
+
+## 1. 异常沿协程树向上传播
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    // ❌ 抓不到！
+    try {
+        launch {
+            throw RuntimeException("子协程异常")
+        }
+    } catch (e: Exception) {
+        println("这行不会执行：${e.message}")
+    }
+
+    delay(100)
+    println("外层 try/catch 没有捕获到")
+}
+```
+
+<Callout type="warn" title="为什么抓不到">
+
+`launch { }` **立刻返回**一个 `Job`，异常发生在**另一个协程**里、**之后的某个时刻**。
+外层的 `try` 早就执行完了。
+
+异常不是往 `try` 传，而是**沿协程树向父协程传播**。
+
+正确写法是把 try/catch 放**进** launch：
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    launch {
+        try {
+            throw RuntimeException("子协程异常")
+        } catch (e: Exception) {
+            println("捕获到：${e.message}")
+        }
+    }.join()
+}
+```
+
 </Callout>
 
-## 学习提纲
+## 2. launch 与 async 的差异
 
-- launch 与 async 的异常暴露时机不同
-- Job vs SupervisorJob
-- CoroutineExceptionHandler 的生效位置
-- try/catch 在挂起函数里的正确用法
-- CancellationException 的特殊性
+```kotlin
+import kotlinx.coroutines.*
 
-## 与 Java / Android 的关键差异
+fun main() = runBlocking {
+    // launch：异常立刻传给父协程
+    val job = launch(SupervisorJob()) {
+        throw RuntimeException("launch 异常")
+    }
+    job.join()
+    println("launch 完成，isCancelled = ${job.isCancelled}")
 
-最反直觉的一章：try/catch 包住 launch 是抓不到异常的。
+    // async：异常被存起来，await() 时才抛
+    val deferred = CoroutineScope(SupervisorJob()).async {
+        throw RuntimeException("async 异常")
+    }
+    delay(50)
+    println("async 已经失败了，但还没抛出")
+
+    try {
+        deferred.await()
+    } catch (e: Exception) {
+        println("await 时捕获：${e.message}")
+    }
+}
+```
+
+| | 异常时机 | 不处理的后果 |
+| --- | --- | --- |
+| `launch` | **立刻**传给父协程 | 走 `CoroutineExceptionHandler` 或崩溃 |
+| `async` | **`await()` 时**抛出 | 从不 await 的话可能被静默吞掉 |
+
+## 3. Job vs SupervisorJob
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    println("=== 普通 Job：一个失败，全部取消 ===")
+    try {
+        coroutineScope {
+            launch { delay(100); println("A 完成") }
+            launch { delay(50); throw RuntimeException("B 失败") }
+            launch { delay(150); println("C 完成") }
+        }
+    } catch (e: Exception) {
+        println("捕获：${e.message}")
+    }
+
+    println()
+    println("=== SupervisorJob：失败不影响兄弟 ===")
+    supervisorScope {
+        launch { delay(100); println("A 完成") }
+        launch {
+            try { delay(50); throw RuntimeException("B 失败") }
+            catch (e: Exception) { println("B 自己处理了：${e.message}") }
+        }
+        launch { delay(150); println("C 完成") }
+    }
+}
+```
+
+<Callout type="success" title="怎么选">
+
+- **`coroutineScope` / `Job`**：任务之间**互相依赖**，
+  一个失败其他就没意义了 → 全部取消
+- **`supervisorScope` / `SupervisorJob`**：任务**互相独立**，
+  一个失败不该影响其他 → 各自处理
+
+Android 上 `viewModelScope` 用的是 **`SupervisorJob`**——
+所以一个 `launch` 崩了不会导致整个 ViewModel 的其他协程都停掉。
+
+</Callout>
+
+## 4. CoroutineExceptionHandler
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val handler = CoroutineExceptionHandler { _, e ->
+        println("Handler 捕获：${e.message}")
+    }
+
+    // ✅ 装在作用域的根 Job 上才生效
+    val scope = CoroutineScope(SupervisorJob() + handler)
+    scope.launch { throw RuntimeException("异常 1") }
+    delay(100)
+
+    // ❌ 装在子协程上不生效——异常已经传给父协程了
+    val scope2 = CoroutineScope(SupervisorJob())
+    scope2.launch(handler) {              // 这个 handler 生效（它是根）
+        launch {                          // 但这个子协程的异常传给父，父有 handler
+            throw RuntimeException("异常 2")
+        }
+    }
+    delay(100)
+}
+```
+
+<Callout type="warn" title="三条限制">
+
+1. **只对 `launch` 生效**，对 `async` 无效（`async` 的异常在 `await` 处）
+2. **必须装在作用域的根协程上**，装在子协程上会被忽略
+3. **不能阻止取消传播**——它只是「最后的兜底日志」，
+   协程该取消还是取消
+
+所以 `CoroutineExceptionHandler` 是**全局兜底**（上报崩溃日志），
+不是业务错误处理。业务错误应该用 try/catch 或者 `Result`。
+
+</Callout>
+
+Android 上的典型用法：
+
+```kt
+private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+    Log.e(TAG, "未捕获的协程异常", throwable)
+    Firebase.crashlytics.recordException(throwable)
+}
+
+class MyViewModel : ViewModel() {
+    fun load() {
+        viewModelScope.launch(exceptionHandler) {
+            // 业务异常还是应该在这里 try/catch
+        }
+    }
+}
+```
+
+## 5. CancellationException 的特殊性
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        try {
+            delay(1000)
+        } catch (e: CancellationException) {
+            println("收到取消信号")
+            throw e                     // ⚠️ 必须重抛
+        } finally {
+            println("清理")
+        }
+    }
+    delay(50)
+    job.cancelAndJoin()
+    println("完成 —— 父协程不会因为取消而崩溃")
+}
+```
+
+<Callout type="warn" title="这是最常见的错误">
+
+`CancellationException` 是**正常的取消信号**，不是错误：
+
+- 它**不会**导致父协程失败
+- 它**不会**触发 `CoroutineExceptionHandler`
+- 但它**必须**被重新抛出，否则取消链断裂
+
+```kt
+// ❌ 吞掉了取消信号
+try {
+    api.fetch()
+} catch (e: Exception) {          // Exception 包含 CancellationException
+    _state.value = Error(e)       // 取消也被当成错误显示给用户了
+}
+
+// ✅
+try {
+    api.fetch()
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    _state.value = Error(e)
+}
+```
+
+同理 `runCatching` 捕获 `Throwable`，协程里要慎用。
+
+</Callout>
+
+## 6. Android 实战模板
+
+```kt
+class MyViewModel(
+    private val repository: Repository,
+) : ViewModel() {
+
+    private val _state = MutableStateFlow<UiState>(UiState.Loading)
+    val state: StateFlow<UiState> = _state.asStateFlow()
+
+    fun load(id: String) {
+        viewModelScope.launch {
+            _state.value = UiState.Loading
+            try {
+                val data = repository.getData(id)
+                _state.value = UiState.Success(data)
+            } catch (e: CancellationException) {
+                throw e                                    // ① 取消原样上抛
+            } catch (e: IOException) {
+                _state.value = UiState.Error("网络异常")     // ② 分类处理
+            } catch (e: HttpException) {
+                _state.value = UiState.Error("服务器错误 ${e.code()}")
+            } catch (e: Exception) {
+                _state.value = UiState.Error("未知错误")     // ③ 兜底
+                Log.e(TAG, "load failed", e)
+            }
+        }
+    }
+}
+```
+
+<Callout type="tip" title="更好的做法：把错误建模进返回类型">
+
+到处写 try/catch 很啰嗦。让 Repository 返回 sealed 类型：
+
+```kt
+sealed interface Result<out T> {
+    data class Success<T>(val data: T) : Result<T>
+    data class Failure(val error: AppError) : Result<Nothing>
+}
+
+class Repository {
+    suspend fun getData(id: String): Result<Data> = try {
+        Result.Success(api.fetch(id))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: IOException) {
+        Result.Failure(AppError.Network)
+    } catch (e: Exception) {
+        Result.Failure(AppError.Unknown(e))
+    }
+}
+
+// ViewModel 里就干净了
+viewModelScope.launch {
+    when (val r = repository.getData(id)) {
+        is Result.Success -> _state.value = UiState.Success(r.data)
+        is Result.Failure -> _state.value = UiState.Error(r.error.message)
+    }
+}
+```
+
+配合 `when` 的穷尽性检查，每种错误都必须被显式处理。
+
+</Callout>
+
+## 7. Flow 的异常处理
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+fun main() = runBlocking {
+    flow {
+        emit(1)
+        throw RuntimeException("上游异常")
+    }
+        .catch { e -> emit(-1); println("catch 到：${e.message}") }   // 只捕获上游
+        .onCompletion { e -> println("完成，异常=${e?.message}") }
+        .collect { println("收到 $it") }
+}
+```
+
+<Callout type="warn">
+
+`catch` 操作符**只捕获它上游的异常**，捕获不到 `collect` 里的异常——
+这叫**异常透明性**。
+
+想处理 `collect` 里的异常，要么把逻辑挪进 `onEach` 放在 `catch` 上游，
+要么在 `collect` 里自己 try/catch。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>try {'{'} launch {'{'} throw ... {'}'} {'}'} catch (e: Exception) {'{'} ... {'}'}</code>
+      <br />
+      能捕获到异常吗？
+    </>
+  }
+  options={[
+    '能',
+    '不能，launch 立刻返回，异常发生在另一个协程的另一个时刻，且沿协程树向父传播',
+    '取决于 Dispatcher',
+    '只能捕获部分异常',
+  ]}
+  answer={1}
+>
+
+**不能**。`launch { }` 立刻返回一个 `Job`，`try` 块随即执行完毕；
+异常是在另一个协程里、之后的某个时刻抛出的。
+
+而且协程的异常传播路径是**沿协程树向父协程**，不是向调用它的 `try` 块。
+
+正确写法是把 try/catch 放**进** launch 内部：
+
+```
+launch {
+    try { ... } catch (e: Exception) { ... }
+}
+```
+
+这是协程里最反直觉的一条，也是新手最常踩的坑。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>coroutineScope</code> 和 <code>supervisorScope</code> 的区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    'coroutineScope 中一个子协程失败会取消所有兄弟；supervisorScope 中子协程失败互不影响',
+    'supervisorScope 更快',
+    'coroutineScope 不能嵌套',
+  ]}
+  answer={1}
+>
+
+区别在**失败是否传播给兄弟**：
+
+- **`coroutineScope`**：一个子协程失败 → 取消所有兄弟 → 异常抛给调用方。
+  适合「任务互相依赖，一个失败其他就没意义」。
+- **`supervisorScope`**：子协程失败只影响自己，兄弟继续执行。
+  适合「任务互相独立」。
+
+Android 上 `viewModelScope` 内部用的是 **`SupervisorJob`**——
+所以一个 `launch` 里出了异常，不会把 ViewModel 里其他正在跑的协程都干掉。
+
+注意 `supervisorScope` 里的子协程需要**自己处理异常**，
+否则会走到 `CoroutineExceptionHandler` 或直接崩溃。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>CoroutineExceptionHandler</code> 的三条限制是什么？
+    </>
+  }
+  options={[
+    '没有限制',
+    '只对 launch 生效（async 无效）；必须装在根协程上；不能阻止取消传播',
+    '只能用于主线程',
+    '每个应用只能有一个',
+  ]}
+  answer={1}
+>
+
+三条限制决定了它只适合做**全局兜底**，不适合业务错误处理：
+
+1. **只对 `launch` 生效**——`async` 的异常存在 `Deferred` 里，等 `await()` 时抛
+2. **必须装在作用域的根协程上**——装在子协程上会被忽略，
+   因为异常已经先传给父协程了
+3. **不能阻止取消**——它只是在协程已经失败之后被调用，做个记录
+
+所以它的正确用法是：上报崩溃日志（Crashlytics）、打兜底 log。
+
+业务错误（网络失败、数据格式错误）应该用 try/catch 或者把错误建模进返回类型。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      Flow 的 <code>catch</code> 操作符能捕获 <code>collect</code> 里抛出的异常吗？
+    </>
+  }
+  options={[
+    '能',
+    '不能，catch 只捕获它上游的异常（异常透明性）',
+    '取决于位置',
+    'Flow 没有 catch 操作符',
+  ]}
+  answer={1}
+>
+
+**不能**。`catch` 遵循**异常透明性** exception transparency：
+它只捕获**它上游**的异常，下游（包括 `collect` 里的代码）的异常会穿透过去。
+
+这是有意的设计：让每个操作符的职责边界清晰，避免「上游的错误处理意外吞掉了
+下游的 bug」。
+
+想处理 `collect` 里的异常，两个办法：
+
+1. 把逻辑挪进 `onEach`，放在 `catch` 的**上游**
+2. 在 `collect` 外面自己 try/catch
+
+配套的还有 `onCompletion`——它能拿到异常（只读，不消费），
+适合做「无论成功失败都要执行」的清理。
+
+</Quiz>
 
 ## 官方参考
 

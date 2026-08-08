@@ -1,20 +1,415 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.5 协程上下文与调度器（Android 主线程 / IO）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+协程「不关心线程」是个美好的说法，但在 Android 上你必须知道代码跑在哪个线程——
+主线程碰不得 I/O，UI 只能在主线程更新。这一课讲 `Dispatchers` 和 `CoroutineContext`。
+
+## 1. 四个内置调度器
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    launch(Dispatchers.Default) {
+        println("Default: ${Thread.currentThread().name}")
+    }
+    launch(Dispatchers.IO) {
+        println("IO: ${Thread.currentThread().name}")
+    }
+    launch(Dispatchers.Unconfined) {
+        println("Unconfined: ${Thread.currentThread().name}")
+    }
+    launch {
+        println("继承父上下文: ${Thread.currentThread().name}")
+    }
+    delay(100)
+}
+```
+
+| 调度器 | 线程池 | 用途 |
+| --- | --- | --- |
+| `Dispatchers.Main` | Android 主线程 | **更新 UI** |
+| `Dispatchers.IO` | 弹性，默认上限 64 | **网络、文件、数据库** |
+| `Dispatchers.Default` | CPU 核心数 | **CPU 密集计算**（解析、排序、图片处理） |
+| `Dispatchers.Unconfined` | 不限定 | ⚠️ 特殊场景，业务代码别用 |
+
+<Callout type="warn" title="IO 和 Default 的区别">
+
+两者**共享同一个线程池**，区别在**并发上限**：
+
+- `Default` 上限 = CPU 核心数。因为 CPU 密集任务开再多线程也没用，只会增加切换开销。
+- `IO` 上限 = 64（可配置）。因为 I/O 任务大部分时间在等待，多开线程能提高吞吐。
+
+选错的后果：
+
+```kt
+// ❌ 在 Default 上做 I/O：核心数个线程全被阻塞，其他计算任务饿死
+withContext(Dispatchers.Default) { file.readText() }
+
+// ❌ 在 IO 上做重计算：64 个线程抢 CPU，上下文切换开销巨大
+withContext(Dispatchers.IO) { hugeList.sortedBy { ... } }
+```
+
+判断标准很简单：**这段代码是在「等」还是在「算」？** 等就 IO，算就 Default。
+
 </Callout>
 
-## 学习提纲
+## 2. withContext 切换线程
 
-- Dispatchers.Main / IO / Default / Unconfined 的适用场景
-- withContext 切换线程
-- CoroutineContext 的元素组合（Job + Dispatcher + Name）
-- 主线程安全 main-safety：谁来负责切线程
-- Android 实战：Repository 内部 withContext(IO)
+```kotlin
+import kotlinx.coroutines.*
 
-## 与 Java / Android 的关键差异
+suspend fun loadAndProcess(): String {
+    val raw = withContext(Dispatchers.IO) {
+        delay(100)                     // 模拟网络请求
+        "raw data"
+    }
 
-取代 Handler/Looper 与线程池的显式管理，但线程模型仍需心里有数。
+    val processed = withContext(Dispatchers.Default) {
+        raw.uppercase()                // 模拟 CPU 计算
+    }
+
+    return processed
+}
+
+fun main() = runBlocking {
+    println(loadAndProcess())
+}
+```
+
+<Callout type="success" title="main-safety：切线程是被调用方的责任">
+
+```kt
+// ✅ Repository 自己保证在正确的线程
+class UserRepository(private val api: ApiService, private val dao: UserDao) {
+    suspend fun getUser(id: String): User = withContext(Dispatchers.IO) {
+        api.fetchUser(id).also { dao.insert(it) }
+    }
+}
+
+// ViewModel 不需要关心线程
+class UserViewModel : ViewModel() {
+    fun load(id: String) {
+        viewModelScope.launch {                    // 默认在 Main
+            val user = repository.getUser(id)      // 内部自己切到 IO
+            _state.value = UiState.Success(user)   // 回到 Main 更新状态
+        }
+    }
+}
+```
+
+`viewModelScope` 和 `lifecycleScope` 默认使用 `Dispatchers.Main.immediate`，
+所以 `launch { }` 里的代码默认在主线程，更新 UI 是安全的。
+
+</Callout>
+
+<Callout type="warn" title="Retrofit 和 Room 已经自己处理了线程">
+
+```kt
+// ❌ 多此一举——Retrofit 的 suspend 函数内部已经切到自己的线程池了
+withContext(Dispatchers.IO) { api.getUser(id) }
+
+// ✅ 直接调用
+val user = api.getUser(id)
+```
+
+同理 Room 的 `suspend` DAO 方法和 `Flow` 返回值也是主线程安全的。
+
+需要 `withContext(Dispatchers.IO)` 的是：**你自己写的阻塞代码**——
+`File` 读写、`SharedPreferences`、旧的阻塞式 SDK。
+
+</Callout>
+
+## 3. CoroutineContext 是元素的集合
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    // 上下文可以用 + 组合
+    val context = Dispatchers.IO + CoroutineName("我的协程") + SupervisorJob()
+
+    launch(context) {
+        println("名字：${coroutineContext[CoroutineName]?.name}")
+        println("线程：${Thread.currentThread().name}")
+    }.join()
+}
+```
+
+主要元素：
+
+| 元素 | 作用 |
+| --- | --- |
+| `Job` | 生命周期与父子关系 |
+| `CoroutineDispatcher` | 在哪个线程执行 |
+| `CoroutineName` | 调试用的名字 |
+| `CoroutineExceptionHandler` | 未捕获异常的处理 |
+
+<Callout type="tip">
+
+`CoroutineName` 在调试时很有用——加上 JVM 参数 `-Dkotlinx.coroutines.debug`
+后，线程名里会带上协程名，日志立刻可读。
+
+Android 上可以在 debug build 里默认开启。
+
+</Callout>
+
+## 4. 上下文继承
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    launch(Dispatchers.IO + CoroutineName("父")) {
+        println("父：${coroutineContext[CoroutineName]?.name}")
+
+        launch {
+            // 继承了父的 Dispatcher 和 Name，但 Job 是新的（父的子 Job）
+            println("子：${coroutineContext[CoroutineName]?.name}")
+        }
+
+        launch(CoroutineName("子自己的名字")) {
+            println("子：${coroutineContext[CoroutineName]?.name}")
+        }
+    }.join()
+}
+```
+
+规则：**子协程继承父的上下文，但 `Job` 总是新建的**（作为父 Job 的子 Job）——
+这正是结构化并发的实现基础。
+
+## 5. Main.immediate
+
+```kt
+// Main：总是 post 到主线程消息队列，即使当前已在主线程
+viewModelScope.launch(Dispatchers.Main) { updateUi() }
+
+// Main.immediate：已在主线程就直接执行，不 post
+viewModelScope.launch(Dispatchers.Main.immediate) { updateUi() }
+```
+
+<Callout type="tip">
+
+`viewModelScope` 和 `lifecycleScope` 默认就用 `Main.immediate`，
+所以你不用手动指定。
+
+它的价值是**避免不必要的一帧延迟**——用 `Main` 的话，即使已经在主线程，
+也要等下一次消息循环。在 `onCreate` 里设置初始 UI 状态时，
+这个差别可能导致一次可见的闪烁。
+
+</Callout>
+
+## 6. 自定义调度器
+
+```kotlin
+import kotlinx.coroutines.*
+import java.util.concurrent.Executors
+
+fun main() = runBlocking {
+    // 单线程调度器：天然线程安全，不需要锁
+    val singleThread = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+
+    try {
+        var counter = 0
+        val jobs = List(100) {
+            launch(singleThread) { counter++ }    // 无需同步
+        }
+        jobs.joinAll()
+        println("counter = $counter")
+    } finally {
+        singleThread.close()                       // ⚠️ 必须关闭
+    }
+}
+```
+
+Android 上更常见的做法是**限制并发数**：
+
+```kt
+val limitedIo = Dispatchers.IO.limitedParallelism(4)   // 最多 4 个并发
+```
+
+比如上传图片时限制并发，避免打满带宽。
+
+<Callout type="warn" title="可注入的 Dispatcher 是可测试性的关键">
+
+```kt
+// ❌ 硬编码，测试时无法控制
+class Repository {
+    suspend fun load() = withContext(Dispatchers.IO) { ... }
+}
+
+// ✅ 注入
+class Repository(private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO) {
+    suspend fun load() = withContext(ioDispatcher) { ... }
+}
+
+// 测试里
+val repo = Repository(UnconfinedTestDispatcher())
+```
+
+这是 Android 官方测试指南的标准建议。Hilt 里通常用限定符注入：
+
+```kt
+@Qualifier annotation class IoDispatcher
+
+@Provides @IoDispatcher
+fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+```
+
+</Callout>
+
+## 7. 常见错误
+
+```kt
+// ❌ 在主线程做阻塞 I/O —— ANR
+viewModelScope.launch {
+    val text = File(path).readText()      // 阻塞主线程！
+}
+
+// ✅
+viewModelScope.launch {
+    val text = withContext(Dispatchers.IO) { File(path).readText() }
+}
+
+// ❌ 在 IO 线程更新 UI —— CalledFromWrongThreadException
+lifecycleScope.launch(Dispatchers.IO) {
+    val data = api.fetch()
+    textView.text = data                  // 崩溃！
+}
+
+// ✅ 只把耗时部分放进 IO
+lifecycleScope.launch {
+    val data = withContext(Dispatchers.IO) { api.fetch() }
+    textView.text = data                  // 回到主线程了
+}
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>Dispatchers.IO</code> 和 <code>Dispatchers.Default</code> 的核心区别是什么？
+    </>
+  }
+  options={[
+    '完全不同的两个线程池',
+    '共享同一线程池，但并发上限不同：Default 是 CPU 核心数，IO 默认是 64',
+    'IO 只能用于网络',
+    'Default 只能用于 UI',
+  ]}
+  answer={1}
+>
+
+两者**共享同一个底层线程池**，区别在**并发上限**：
+
+- `Default` 上限 = CPU 核心数。CPU 密集任务开再多线程也不会更快，
+  只会增加上下文切换开销。
+- `IO` 上限 = 64（可配置）。I/O 任务大部分时间在等，多开线程能提高吞吐。
+
+判断标准一句话：**这段代码是在「等」还是在「算」？**
+
+- 等（网络、文件、数据库、SharedPreferences）→ `IO`
+- 算（JSON 解析、大列表排序、图片处理、加解密）→ `Default`
+
+选错的后果：在 `Default` 上做 I/O 会把有限的线程全阻塞住，
+让真正的计算任务饿死。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      调用 Retrofit 的 <code>suspend</code> 函数时，还需要包 <code>withContext(Dispatchers.IO)</code> 吗？
+    </>
+  }
+  options={[
+    '需要，否则会阻塞主线程',
+    '不需要，Retrofit 的 suspend 函数内部已经切换到自己的线程池了',
+    '需要，但要用 Default',
+    '取决于 Retrofit 版本',
+  ]}
+  answer={1}
+>
+
+**不需要**。Retrofit 的 `suspend` 函数是主线程安全的——内部会把请求派发到
+OkHttp 的线程池。多包一层 `withContext(Dispatchers.IO)` 只是浪费一次线程切换。
+
+Room 的 `suspend` DAO 方法和 `Flow` 返回值同理。
+
+真正需要 `withContext(Dispatchers.IO)` 的是**你自己写的阻塞代码**：
+
+- `File` 读写
+- `SharedPreferences`（是的，它是阻塞的）
+- 旧的阻塞式第三方 SDK
+- `Bitmap` 解码
+
+判断方法：这个 API 有没有提供 `suspend` 版本？有就直接调，没有就自己包。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>Dispatchers.Main</code> 和 <code>Dispatchers.Main.immediate</code> 的区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    'Main 总是 post 到主线程消息队列；immediate 在已处于主线程时直接执行，省掉一帧延迟',
+    'immediate 优先级更高',
+    'immediate 不能更新 UI',
+  ]}
+  answer={1}
+>
+
+`Dispatchers.Main` **总是** post 到主线程的消息队列，即使当前就在主线程——
+这意味着要等下一次消息循环。
+
+`Main.immediate` 检查当前线程：已经在主线程就直接执行，否则才 post。
+
+实际影响：在 `onCreate` 里设置初始 UI 状态时，用 `Main` 会晚一帧生效，
+可能导致一次可见的闪烁。
+
+好消息是 `viewModelScope` 和 `lifecycleScope` **默认就用 `Main.immediate`**，
+所以通常你不用手动指定。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="为什么应该把 Dispatcher 作为构造函数参数注入，而不是直接写 Dispatchers.IO？"
+  options={[
+    '性能更好',
+    '可测试性：测试时可以注入 TestDispatcher 来控制协程执行时机',
+    '为了支持多线程',
+    '这是 Kotlin 语法要求',
+  ]}
+  answer={1}
+>
+
+**可测试性**。硬编码 `Dispatchers.IO` 意味着测试时无法控制协程什么时候执行、
+在哪个线程执行，只能靠 `delay` 和等待，测试会变慢且不稳定。
+
+注入之后：
+
+```
+class Repository(private val io: CoroutineDispatcher = Dispatchers.IO) {
+    suspend fun load() = withContext(io) { ... }
+}
+
+// 测试
+val repo = Repository(UnconfinedTestDispatcher())   // 立即执行，无需等待
+```
+
+这是 Android 官方测试指南的标准建议。Hilt 项目里通常配合限定符：
+
+```
+@Qualifier annotation class IoDispatcher
+@Provides @IoDispatcher fun provideIo(): CoroutineDispatcher = Dispatchers.IO
+```
+
+</Quiz>
 
 ## 官方参考
 

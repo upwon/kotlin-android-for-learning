@@ -1,20 +1,455 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.3 取消与超时」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+协程的取消是**协作式**的——调用 `cancel()` 不会强行杀死协程，
+只是设置一个标记，**协程自己要配合检查**。不理解这一点，
+就会写出「取消了但还在跑」的代码。
+
+## 1. 取消是协作式的
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    // ✅ delay 是可取消的挂起函数，会响应取消
+    val good = launch {
+        repeat(10) { i ->
+            delay(100)
+            println("good $i")
+        }
+    }
+    delay(250)
+    good.cancelAndJoin()
+    println("good 已取消")
+
+    println("---")
+
+    // ❌ 纯 CPU 计算，不检查取消标记
+    val bad = launch(Dispatchers.Default) {
+        var i = 0
+        val start = System.currentTimeMillis()
+        while (i < 5) {
+            if (System.currentTimeMillis() >= start + i * 100) {
+                println("bad $i")
+                i++
+            }
+        }
+    }
+    delay(250)
+    bad.cancelAndJoin()
+    println("bad 已取消 —— 但它把 5 次都打印完了")
+}
+```
+
+<Callout type="warn" title="所有 kotlinx.coroutines 的挂起函数都是可取消的">
+
+`delay`、`withContext`、`join`、`await`、`Flow.collect` 都会在恢复时
+检查取消状态，被取消就抛 `CancellationException`。
+
+**不可取消的是你自己写的 CPU 密集循环**——它没有挂起点，
+永远没机会检查那个标记。
+
 </Callout>
 
-## 学习提纲
+## 2. 让计算代码可取消
 
-- 取消是协作式的：isActive / ensureActive / yield
-- 不可取消的计算代码块
-- finally 中的清理与 NonCancellable
-- withTimeout / withTimeoutOrNull
-- Android 实战：页面销毁时的自动取消
+```kotlin
+import kotlinx.coroutines.*
 
-## 与 Java / Android 的关键差异
+fun main() = runBlocking {
+    // 方式 1：检查 isActive
+    val a = launch(Dispatchers.Default) {
+        var i = 0
+        while (isActive) {                 // ← 关键
+            if (i % 100_000_000 == 0) println("a 计算中 $i")
+            i++
+        }
+        println("a 优雅退出")
+    }
+    delay(100)
+    a.cancelAndJoin()
 
-和 Thread.interrupt 类似是协作式的，但结构化并发让取消可以沿树传播。
+    println("---")
+
+    // 方式 2：ensureActive()，被取消就抛异常
+    val b = launch(Dispatchers.Default) {
+        repeat(1000) {
+            ensureActive()                 // ← 主动检查点
+            Thread.sleep(10)
+        }
+    }
+    delay(100)
+    b.cancelAndJoin()
+    println("b 已取消")
+
+    // 方式 3：yield()，让出执行权同时检查取消
+    val c = launch(Dispatchers.Default) {
+        repeat(1000) {
+            yield()
+            Thread.sleep(10)
+        }
+    }
+    delay(100)
+    c.cancelAndJoin()
+    println("c 已取消")
+}
+```
+
+| 方式 | 行为 | 用途 |
+| --- | --- | --- |
+| `isActive` | 返回布尔值 | 循环条件，可以做清理后正常退出 |
+| `ensureActive()` | 被取消就抛 `CancellationException` | 快速失败 |
+| `yield()` | 让出线程 + 检查取消 | 长计算中给别的协程机会 |
+
+## 3. finally 中的清理
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        try {
+            repeat(10) { i ->
+                delay(100)
+                println("工作 $i")
+            }
+        } finally {
+            println("清理资源")
+            // delay(100)      // ❌ 这里的挂起会立刻抛异常，因为协程已经取消
+        }
+    }
+    delay(250)
+    job.cancelAndJoin()
+}
+```
+
+<Callout type="warn" title="已取消的协程里不能再挂起">
+
+协程被取消后，它的 `Job` 状态是 `Cancelling`，此时**任何挂起函数都会立刻抛
+`CancellationException`**。
+
+需要在清理阶段做挂起操作（比如关闭网络连接、写入数据库）时，
+用 `withContext(NonCancellable)`：
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        try {
+            repeat(10) { delay(100); println("工作 $it") }
+        } finally {
+            withContext(NonCancellable) {
+                delay(100)                    // ✅ 这里可以挂起
+                println("异步清理完成")
+            }
+        }
+    }
+    delay(250)
+    job.cancelAndJoin()
+}
+```
+
+**`NonCancellable` 只用于 `finally` 里的清理**，别拿它包住主逻辑——
+那等于禁用了取消。
+
+</Callout>
+
+## 4. 超时
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    // withTimeout：超时抛 TimeoutCancellationException
+    try {
+        withTimeout(200) {
+            delay(500)
+            println("不会执行到这里")
+        }
+    } catch (e: TimeoutCancellationException) {
+        println("超时了：${e.message}")
+    }
+
+    // withTimeoutOrNull：超时返回 null
+    val result = withTimeoutOrNull(200) {
+        delay(500)
+        "结果"
+    }
+    println("result = $result")
+
+    val ok = withTimeoutOrNull(500) {
+        delay(100)
+        "及时完成"
+    }
+    println("ok = $ok")
+}
+```
+
+<Callout type="tip">
+
+`withTimeoutOrNull` 在 Android 上通常更好用——超时不是「异常情况」，
+而是需要走降级逻辑的正常分支：
+
+```kt
+val cached = withTimeoutOrNull(300) { api.fetchFresh() } ?: loadFromCache()
+```
+
+</Callout>
+
+<Callout type="warn" title="超时可能导致资源泄漏">
+
+```kt
+// ⚠️ 如果超时发生在 acquire 之后、try 之前，资源不会被释放
+withTimeout(100) {
+    val resource = acquire()
+    try { use(resource) } finally { release(resource) }
+}
+
+// ✅ 用 use，或者把获取放在 withTimeout 外面
+val resource = acquire()
+try {
+    withTimeout(100) { use(resource) }
+} finally {
+    release(resource)
+}
+```
+
+</Callout>
+
+## 5. CancellationException 的特殊性
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        try {
+            delay(1000)
+        } catch (e: CancellationException) {
+            println("捕获到取消：${e.message}")
+            throw e                          // ⚠️ 必须重抛！
+        }
+    }
+    delay(100)
+    job.cancelAndJoin()
+    println("完成")
+}
+```
+
+<Callout type="warn" title="这是协程里最容易犯的错">
+
+`CancellationException` 是协程用来**传递取消信号**的，它不是「错误」。
+
+```kt
+// ❌ 吞掉了取消信号，父协程认为子协程正常完成了
+try {
+    api.fetch()
+} catch (e: Exception) {          // Exception 包含 CancellationException
+    showError(e)
+}
+
+// ✅ 单独处理并重抛
+try {
+    api.fetch()
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    showError(e)
+}
+```
+
+`runCatching` 有同样的问题（它捕获 `Throwable`），
+见 [3.3 异常](/docs/03-control-flow/exceptions)。
+
+</Callout>
+
+## 6. Android 实战
+
+```kt
+class SearchViewModel : ViewModel() {
+    private var searchJob: Job? = null
+
+    fun search(query: String) {
+        searchJob?.cancel()                  // 取消上一次搜索
+        searchJob = viewModelScope.launch {
+            delay(300)                       // 防抖：300ms 内又输入就被取消了
+            try {
+                val results = repository.search(query)
+                _state.value = UiState.Success(results)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = UiState.Error(e.message)
+            }
+        }
+    }
+}
+```
+
+<Callout type="success" title="这个「取消上一次」模式非常常用">
+
+搜索联想、页面刷新、滚动加载——凡是「新请求应该取代旧请求」的场景都适用。
+
+用 Flow 的话有更简洁的写法：
+
+```kt
+private val query = MutableStateFlow("")
+
+val results = query
+    .debounce(300)                    // 防抖
+    .filter { it.isNotBlank() }
+    .flatMapLatest { repository.search(it) }   // 新值到来时自动取消上一个
+    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+```
+
+`flatMapLatest` 就是「取消上一个」的语义。见
+[8.6 异步流](/docs/08-coroutines/flow)。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question="调用 job.cancel() 后，一个纯 CPU 计算的 while 循环会立刻停止吗？"
+  options={[
+    '会，协程会被强制杀死',
+    '不会，取消是协作式的，没有挂起点或主动检查就不会响应',
+    '会，但要等 100ms',
+    '取决于 Dispatcher',
+  ]}
+  answer={1}
+>
+
+**不会**。`cancel()` 只是把 Job 的状态置为 `Cancelling`，
+协程必须**自己配合检查**才会停下。
+
+kotlinx.coroutines 的所有挂起函数（`delay`、`withContext`、`await`、`collect`）
+都会在恢复时检查这个状态并抛 `CancellationException`——所以有挂起点的代码
+天然可取消。
+
+纯 CPU 循环没有挂起点，需要主动检查：
+
+- `while (isActive)` —— 返回布尔值，可以做清理后正常退出
+- `ensureActive()` —— 被取消就抛异常，快速失败
+- `yield()` —— 让出线程 + 检查取消
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      在 <code>finally</code> 块里调用 <code>delay(100)</code> 做清理，会发生什么？
+    </>
+  }
+  options={[
+    '正常执行',
+    '立刻抛 CancellationException，因为协程已处于取消状态，任何挂起都会失败',
+    '会等待 100ms 后再取消',
+    '编译错误',
+  ]}
+  answer={1}
+>
+
+协程被取消后处于 `Cancelling` 状态，此时**任何挂起函数都会立刻抛
+`CancellationException`**——这是为了防止已取消的协程继续占用资源。
+
+需要在清理阶段做挂起操作（关闭连接、写数据库）时用 `NonCancellable`：
+
+```
+finally {
+    withContext(NonCancellable) {
+        delay(100)
+        cleanup()
+    }
+}
+```
+
+**`NonCancellable` 只用于 `finally` 里的清理**。拿它包住主逻辑等于彻底禁用取消，
+那是滥用。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      捕获了 <code>CancellationException</code> 但不重新抛出，会怎样？
+    </>
+  }
+  options={[
+    '没有影响',
+    '取消信号被吞掉，父协程以为子协程正常完成，结构化并发被破坏',
+    '会导致内存泄漏',
+    '协程会重启',
+  ]}
+  answer={1}
+>
+
+`CancellationException` 不是「错误」，而是协程用来**传递取消信号**的机制。
+吞掉它，父协程就收不到「我已经响应取消了」的确认，
+协程可能表现为「取消了但还在跑」。
+
+最常见的犯错形式：
+
+```
+try { api.fetch() }
+catch (e: Exception) { showError(e) }    // Exception 包含 CancellationException！
+```
+
+正确写法是单独捕获并重抛：
+
+```
+catch (e: CancellationException) { throw e }
+catch (e: Exception) { showError(e) }
+```
+
+`runCatching` 有同样的问题（它捕获 `Throwable`），协程里要慎用。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      实现搜索防抖（用户停止输入 300ms 后才发请求），用协程怎么写最简洁？
+    </>
+  }
+  options={[
+    '每次输入都启动一个协程，用 Handler 延迟',
+    '保存上一次的 Job，新输入时先 cancel 再 launch + delay(300)；或者用 Flow 的 debounce + flatMapLatest',
+    '用 Thread.sleep(300)',
+    '用 withTimeout(300)',
+  ]}
+  answer={1}
+>
+
+两种写法都常见。
+
+**Job 版本**（直观）：
+
+```
+searchJob?.cancel()
+searchJob = viewModelScope.launch {
+    delay(300)                    // 300ms 内又输入的话，这个协程已被取消
+    val r = repository.search(query)
+    _state.value = UiState.Success(r)
+}
+```
+
+**Flow 版本**（更声明式）：
+
+```
+query.debounce(300)
+    .filter { it.isNotBlank() }
+    .flatMapLatest { repository.search(it) }
+    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+```
+
+`flatMapLatest` 的语义正是「新值到来就取消上一个」。
+
+这个「取消上一次」模式在搜索联想、下拉刷新、滚动加载里都会用到。
+
+</Quiz>
 
 ## 官方参考
 

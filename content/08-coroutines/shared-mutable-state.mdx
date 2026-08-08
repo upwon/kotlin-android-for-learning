@@ -1,21 +1,393 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.9 共享状态与并发」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+协程让并发变简单了，但**线程安全问题一点没少**——多个协程可能真的跑在不同线程上。
+这一课讲协程里正确的同步方式，以及为什么不能直接用 `synchronized`。
+
+## 1. 问题复现
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun massiveRun(action: suspend () -> Unit) {
+    withContext(Dispatchers.Default) {
+        repeat(100) {
+            launch { repeat(1000) { action() } }
+        }
+    }
+}
+
+var counter = 0
+
+fun main() = runBlocking {
+    massiveRun { counter++ }
+    println("期望 100000，实际 $counter")
+}
+```
+
+`counter++` 不是原子操作（读 → 加 → 写），多个线程同时执行会丢失更新。
+
+## 2. 方案一：原子类
+
+```kotlin
+import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicInteger
+
+suspend fun massiveRun(action: suspend () -> Unit) {
+    withContext(Dispatchers.Default) {
+        repeat(100) { launch { repeat(1000) { action() } } }
+    }
+}
+
+val atomicCounter = AtomicInteger(0)
+
+fun main() = runBlocking {
+    massiveRun { atomicCounter.incrementAndGet() }
+    println("原子类：${atomicCounter.get()}")
+}
+```
+
+<Callout type="tip">
+
+简单计数器用原子类最合适——无锁，性能最好。
+
+但它只能保护**单个变量的单个操作**。需要「读取-判断-修改」这种复合操作时，
+原子类就不够了（`compareAndSet` 可以但很难写对）。
+
 </Callout>
 
-## 学习提纲
+## 3. 方案二：Mutex（协程的锁）
 
-- 问题复现：多协程修改同一变量
-- Mutex 与 withLock
-- 限定在单线程上下文中
-- 原子类与不可变数据的取舍
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
-## 与 Java / Android 的关键差异
+suspend fun massiveRun(action: suspend () -> Unit) {
+    withContext(Dispatchers.Default) {
+        repeat(100) { launch { repeat(1000) { action() } } }
+    }
+}
 
-synchronized 会阻塞线程，协程里应该用 Mutex。
+val mutex = Mutex()
+var mutexCounter = 0
+
+fun main() = runBlocking {
+    massiveRun {
+        mutex.withLock { mutexCounter++ }
+    }
+    println("Mutex：$mutexCounter")
+}
+```
+
+<Callout type="warn" title="为什么不能用 synchronized">
+
+```kt
+// ❌ synchronized 块里不能调用挂起函数（编译错误）
+synchronized(lock) {
+    delay(100)          // 编译报错
+}
+
+// ❌ 即使能编译，synchronized 会阻塞整个线程
+synchronized(lock) {
+    heavyWork()         // 其他协程也用不了这个线程了
+}
+
+// ✅ Mutex 是挂起而不是阻塞
+mutex.withLock {
+    delay(100)          // 可以挂起
+}
+```
+
+关键差异：
+
+| | `synchronized` | `Mutex` |
+| --- | --- | --- |
+| 等待时 | **阻塞线程** | **挂起协程**，线程可以去干别的 |
+| 能否调挂起函数 | ❌ | ✅ |
+| 可重入 | ✅ | ❌（重入会死锁！） |
+
+**`Mutex` 不可重入**——同一个协程里嵌套 `withLock` 会永久死锁。
+
+</Callout>
+
+## 4. 方案三：限定在单线程
+
+```kotlin
+import kotlinx.coroutines.*
+
+@OptIn(DelicateCoroutinesApi::class)
+fun main() = runBlocking {
+    val singleThread = newSingleThreadContext("counter")
+    var counter = 0
+
+    try {
+        withContext(Dispatchers.Default) {
+            repeat(100) {
+                launch {
+                    repeat(1000) {
+                        // 每次修改都切到同一个线程 → 天然串行
+                        withContext(singleThread) { counter++ }
+                    }
+                }
+            }
+        }
+        println("单线程限定：$counter")
+    } finally {
+        singleThread.close()
+    }
+}
+```
+
+<Callout type="warn">
+
+上面这种「细粒度切换」性能很差——每次 `withContext` 都有调度开销。
+
+**粗粒度限定**才是对的用法：把整段逻辑放进单线程上下文里跑一次。
+
+```kt
+withContext(singleThread) {
+    repeat(100_000) { counter++ }    // 整段都在同一线程，无需同步
+}
+```
+
+</Callout>
+
+## 5. 方案四：不共享（最推荐）
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    // 每个协程算自己的，最后汇总——没有共享状态就没有竞争
+    val results = withContext(Dispatchers.Default) {
+        (1..100).map { async { (1..1000).sum() } }.awaitAll()
+    }
+    println("不共享：${results.sum()}")
+}
+```
+
+<Callout type="success" title="最好的同步是不需要同步">
+
+Android 上的实践：
+
+```kt
+// ✅ 用不可变数据 + StateFlow，更新是原子的
+private val _state = MutableStateFlow(UiState())
+fun addItem(item: Item) {
+    _state.update { it.copy(items = it.items + item) }   // update 是原子的 CAS
+}
+
+// ❌ 共享可变集合，需要自己同步
+private val items = mutableListOf<Item>()
+```
+
+`MutableStateFlow.update { }` 内部是 CAS 循环，天然线程安全。
+配合不可变的 `data class` 和 `List`，绝大多数 Android 状态管理场景
+**根本不需要显式的锁**。
+
+</Callout>
+
+## 6. 各方案对比
+
+| 方案 | 适用 | 注意 |
+| --- | --- | --- |
+| **不共享** | 首选 | 用不可变数据 + `StateFlow.update` |
+| **原子类** | 简单计数器 | 只能保护单个操作 |
+| **`Mutex`** | 复合操作、保护一段逻辑 | 不可重入；粒度要小 |
+| **单线程限定** | 状态复杂、修改频繁 | 粗粒度使用 |
+| **`actor`** | 状态机 | API 尚未稳定 |
+| ~~`synchronized`~~ | ❌ | 阻塞线程，不能挂起 |
+
+## 7. Android 常见场景
+
+```kt
+// 场景 1：内存缓存（多协程并发读写）
+class UserCache {
+    private val mutex = Mutex()
+    private val cache = mutableMapOf<String, User>()
+
+    suspend fun get(id: String): User? = mutex.withLock { cache[id] }
+
+    suspend fun put(user: User) = mutex.withLock { cache[user.id] = user }
+
+    // 复合操作：查不到就加载，必须整体加锁
+    suspend fun getOrLoad(id: String, loader: suspend () -> User): User =
+        mutex.withLock {
+            cache[id] ?: loader().also { cache[id] = it }
+        }
+}
+```
+
+<Callout type="warn" title="上面 getOrLoad 有个隐患">
+
+`loader()` 在**持有锁的情况下**执行——如果它是个耗时的网络请求，
+所有其他协程都会被挡住。
+
+更好的做法是用 `Deferred` 做去重：
+
+```kt
+class UserCache {
+    private val mutex = Mutex()
+    private val inFlight = mutableMapOf<String, Deferred<User>>()
+
+    suspend fun getOrLoad(id: String, scope: CoroutineScope,
+                          loader: suspend () -> User): User {
+        val deferred = mutex.withLock {
+            inFlight.getOrPut(id) {
+                scope.async { loader() }     // 锁内只做登记，不执行请求
+            }
+        }
+        return deferred.await()              // 在锁外等待
+    }
+}
+```
+
+原则：**锁内不做耗时操作**。
+
+</Callout>
+
+```kt
+// 场景 2：StateFlow 的原子更新（推荐做法）
+class MyViewModel : ViewModel() {
+    private val _state = MutableStateFlow(UiState())
+    val state = _state.asStateFlow()
+
+    fun toggleSelection(id: Long) {
+        _state.update { current ->                    // 原子的 CAS 更新
+            val selected = current.selectedIds.toMutableSet()
+            if (!selected.add(id)) selected.remove(id)
+            current.copy(selectedIds = selected)
+        }
+    }
+}
+```
+
+<Callout type="warn">
+
+注意用 `update { }` 而不是 `_state.value = _state.value.copy(...)`——
+后者是「读 → 改 → 写」，中间可能被别的协程插入更新。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      为什么协程里不能用 <code>synchronized</code>？
+    </>
+  }
+  options={[
+    '语法不支持',
+    '它阻塞整个线程（而不是挂起协程），而且块内不能调用挂起函数',
+    '性能太差',
+    '其实可以用，没有问题',
+  ]}
+  answer={1}
+>
+
+两个问题：
+
+1. **阻塞线程**。协程的核心优势是「挂起时释放线程」，`synchronized` 等待锁时
+   把整个线程占住了——线程池里的其他协程也跑不了，严重时会耗尽线程池。
+2. **不能调挂起函数**。编译器直接拒绝在 `synchronized` 块里写 `suspend` 调用，
+   因为挂起后恢复可能在另一个线程，而 monitor 锁是线程绑定的。
+
+替代品是 `Mutex.withLock { }`——等待时**挂起**协程而不阻塞线程，
+块内可以自由调用挂起函数。
+
+但注意 `Mutex` **不可重入**：同一协程嵌套 `withLock` 会死锁。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>_state.value = _state.value.copy(count = count + 1)</code> 和
+      <code>_state.update {'{'} it.copy(...) {'}'}</code> 有什么区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    '前者是「读-改-写」三步，中间可能被其他协程插入；update 是原子的 CAS 循环',
+    'update 更慢',
+    '前者不能用于 StateFlow',
+  ]}
+  answer={1}
+>
+
+`_state.value = _state.value.copy(...)` 分三步：读当前值 → 计算新值 → 写回。
+两个协程同时执行时，后写的会覆盖先写的，导致**更新丢失**。
+
+`update { }` 内部是 **CAS 循环**：读取 → 计算 → 尝试原子写入，
+如果期间值被改过就重试。整个过程是原子的。
+
+所以并发更新 StateFlow 时**一律用 `update`**。这也是为什么
+`update` 的 lambda 可能被调用多次（重试时），
+所以里面**不要有副作用**。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="在 Mutex 保护的临界区里执行网络请求，有什么问题？"
+  options={[
+    '没有问题',
+    '锁被长时间持有，所有其他协程都被挡住，吞吐量严重下降',
+    '会导致死锁',
+    '网络请求会失败',
+  ]}
+  answer={1}
+>
+
+**锁内不做耗时操作**是并发编程的通用原则，协程里也一样。
+
+网络请求可能要几百毫秒到几秒，期间所有想拿这个锁的协程都在排队挂起，
+把并发退化成了串行。
+
+改进思路是**锁内只做快速的状态登记，耗时操作放到锁外**：
+
+```
+val deferred = mutex.withLock {
+    inFlight.getOrPut(id) { scope.async { loader() } }   // 锁内只登记
+}
+return deferred.await()                                   // 锁外等待
+```
+
+这个模式还顺带实现了**请求去重**——同一个 id 的并发请求只会真正发一次。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些是协程中处理共享可变状态的合理方案？"
+  options={[
+    '用不可变数据 + StateFlow.update（不共享可变状态）',
+    'Mutex.withLock',
+    'AtomicInteger 等原子类',
+    'synchronized 代码块',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+A、B、C 都是正确方案，按推荐顺序：
+
+- **A 最优**：最好的同步是不需要同步。用不可变的 `data class` + `List`，
+  配合 `StateFlow.update` 的原子 CAS，Android 上绝大多数状态管理场景
+  根本不需要显式的锁。
+- **C**：简单计数器用原子类最合适，无锁性能最好。局限是只能保护单个操作。
+- **B**：需要保护复合操作（读-判断-写）或一段逻辑时用 `Mutex`。
+  注意不可重入、锁粒度要小。
+
+**D 不行**：阻塞线程 + 块内不能挂起，两条都和协程的模型冲突。
+
+还有一个方案是**单线程限定**（`withContext(singleThreadContext)`），
+适合状态复杂的场景，但要粗粒度使用，否则调度开销比锁还大。
+
+</Quiz>
 
 ## 官方参考
 
-- 官方中文：[shared-mutable-state](https://book.kotlincn.net/text/shared-mutable-state.html)
-- 官方英文：[shared-mutable-state](https://kotlinlang.org/docs/shared-mutable-state.html)
+- 官方中文：[shared-mutable-state-and-concurrency](https://book.kotlincn.net/text/shared-mutable-state-and-concurrency.html)
+- 官方英文：[shared-mutable-state-and-concurrency](https://kotlinlang.org/docs/shared-mutable-state-and-concurrency.html)

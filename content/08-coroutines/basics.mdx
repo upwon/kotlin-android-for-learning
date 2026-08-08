@@ -1,20 +1,393 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 8.2 协程基础」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一课把协程的四个核心概念钉死：**`suspend`、`CoroutineScope`、`Job`、`launch`/`async`**。
+搞清楚它们的关系，后面几章就都是细节了。
+
+## 1. 第一个协程
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {          // 创建一个协程作用域，阻塞当前线程直到内部完成
+    println("开始")
+
+    launch {                        // 启动一个子协程，不阻塞
+        delay(200)
+        println("子协程完成")
+    }
+
+    println("主协程继续（子协程还在等待）")
+    delay(300)
+    println("结束")
+}
+```
+
+<Callout type="warn" title="runBlocking 只用于 main 函数和测试">
+
+它会**阻塞当前线程**直到内部协程全部完成——这正是协程要避免的事。
+
+Android 上：
+- ✅ 单元测试用 `runTest`（协程测试库）
+- ✅ `main()` 函数
+- ❌ **绝不要在 Activity/Fragment/ViewModel 里用**，那是主线程
+
 </Callout>
 
-## 学习提纲
+## 2. CoroutineScope：协程的容器
 
-- suspend 函数的含义与编译后的 CPS 变换
-- CoroutineScope / CoroutineContext / Job
-- launch vs async
-- 结构化并发 structured concurrency
-- Android 实战：viewModelScope / lifecycleScope
+每个协程都属于某个作用域，作用域决定了它的**生命周期**。
 
-## 与 Java / Android 的关键差异
+```kotlin
+import kotlinx.coroutines.*
 
-协程的核心不是并发原语，而是结构化并发带来的生命周期管理。
+fun main() = runBlocking {
+    // coroutineScope：等待所有子协程完成才继续
+    coroutineScope {
+        launch { delay(100); println("A") }
+        launch { delay(200); println("B") }
+    }
+    println("A 和 B 都完成了")
+}
+```
+
+Android 提供的现成作用域：
+
+| 作用域 | 生命周期 | 用途 |
+| --- | --- | --- |
+| `viewModelScope` | ViewModel 存活期间 | 业务逻辑、数据加载 |
+| `lifecycleScope` | Activity/Fragment 存活期间 | UI 相关 |
+| `viewLifecycleOwner.lifecycleScope` | Fragment 的 View 存活期间 | **Fragment 里的正确选择** |
+| `GlobalScope` | 整个进程 | ⚠️ 基本不该用 |
+
+<Callout type="warn" title="GlobalScope 是反模式">
+
+```kt
+// ❌ 脱离任何生命周期，页面关了还在跑，无法取消，必然泄漏
+GlobalScope.launch { repository.upload(file) }
+
+// ✅ 绑定到有意义的生命周期
+viewModelScope.launch { repository.upload(file) }
+
+// ✅ 真的需要「比页面活得久」的任务，用 WorkManager
+WorkManager.getInstance(context).enqueue(uploadRequest)
+```
+
+「上传完成后才能结束」这类需求，答案不是 `GlobalScope`，而是
+**WorkManager**（能跨进程重启、有重试策略）或者 **Application 级的作用域**。
+
+</Callout>
+
+## 3. Job：协程的句柄
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        repeat(5) { i ->
+            delay(100)
+            println("工作中 $i")
+        }
+    }
+
+    println("isActive = ${job.isActive}")
+    delay(250)
+
+    job.cancel()                  // 取消
+    job.join()                    // 等待真正结束
+
+    println("isCancelled = ${job.isCancelled}, isCompleted = ${job.isCompleted}")
+}
+```
+
+`Job` 表示一个协程的生命周期，可以 `cancel()`、`join()`、查询状态，
+以及组织**父子关系**。
+
+## 4. launch vs async
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun fetchUser(): String {
+    delay(300)
+    return "Summer"
+}
+
+suspend fun fetchOrders(): List<String> {
+    delay(500)
+    return listOf("订单A", "订单B")
+}
+
+fun main() = runBlocking {
+    // launch：不关心返回值，返回 Job
+    val job: Job = launch { println("发射后不管") }
+
+    // async：需要返回值，返回 Deferred<T>
+    val start = System.currentTimeMillis()
+    val userDeferred: Deferred<String> = async { fetchUser() }
+    val ordersDeferred = async { fetchOrders() }
+
+    // await 处汇合
+    println("${userDeferred.await()} 有 ${ordersDeferred.await().size} 个订单")
+    println("耗时约 ${System.currentTimeMillis() - start}ms（不是 800ms）")
+
+    job.join()
+}
+```
+
+| | `launch` | `async` |
+| --- | --- | --- |
+| 返回 | `Job` | `Deferred<T>`（是 Job 的子类型） |
+| 取结果 | 无 | `await()` |
+| 异常时机 | **立刻**抛给父协程 | **`await()` 时**才抛 |
+
+<Callout type="warn" title="async 的异常会被延迟">
+
+```kt
+val deferred = async { throw RuntimeException("炸了") }
+// 到这里什么都没发生
+deferred.await()    // ← 这里才抛
+```
+
+如果你 `async` 之后**从不 `await`**，异常可能被静默吞掉（在
+`SupervisorJob` 下）。
+
+规则：**`async` 必须配对 `await`。** 不需要返回值就用 `launch`。
+
+</Callout>
+
+## 5. 挂起函数的编写
+
+```kotlin
+import kotlinx.coroutines.*
+
+// ✅ 挂起函数应该是「主线程安全」的：调用方不用关心它在哪个线程跑
+suspend fun loadData(): String = withContext(Dispatchers.IO) {
+    delay(100)          // 模拟 I/O
+    "数据"
+}
+
+fun main() = runBlocking {
+    println(loadData())
+}
+```
+
+<Callout type="success" title="main-safety 原则">
+
+**挂起函数应该自己负责切到正确的线程**，而不是要求调用方切。
+
+```kt
+// ❌ 调用方需要知道实现细节
+suspend fun getUser(): User = api.fetch()      // 里面是阻塞 I/O
+viewModelScope.launch(Dispatchers.IO) { getUser() }   // 调用方被迫指定
+
+// ✅ 函数自己保证
+suspend fun getUser(): User = withContext(Dispatchers.IO) { api.fetch() }
+viewModelScope.launch { getUser() }            // 调用方不用管
+```
+
+这是 Android 官方指南明确推荐的做法。见
+[8.5 上下文与调度器](/docs/08-coroutines/context-and-dispatchers)。
+
+</Callout>
+
+## 6. 协程构建器全景
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    // 1. launch —— 启动并发协程，返回 Job
+    launch { println("launch") }
+
+    // 2. async —— 启动并发协程，返回 Deferred
+    println(async { "async 结果" }.await())
+
+    // 3. coroutineScope —— 挂起，等所有子协程完成
+    coroutineScope {
+        launch { delay(50); println("scope 内的子协程") }
+    }
+    println("coroutineScope 返回后，子协程一定完成了")
+
+    // 4. withContext —— 切换上下文并等待结果
+    val r = withContext(Dispatchers.Default) { "在别的线程算的" }
+    println(r)
+
+    // 5. supervisorScope —— 子协程失败不影响兄弟
+    supervisorScope {
+        launch { throw RuntimeException("失败") }
+        launch { delay(50); println("我还活着") }
+    }.also { delay(100) }
+}
+```
+
+## 7. Android 完整示例
+
+```kt
+class UserViewModel(
+    private val repository: UserRepository,
+) : ViewModel() {
+
+    private val _state = MutableStateFlow<UiState>(UiState.Loading)
+    val state: StateFlow<UiState> = _state.asStateFlow()
+
+    fun load(userId: String) {
+        viewModelScope.launch {                 // ViewModel 销毁时自动取消
+            _state.value = UiState.Loading
+            try {
+                // 两个请求并发
+                val user = async { repository.getUser(userId) }
+                val orders = async { repository.getOrders(userId) }
+
+                _state.value = UiState.Success(user.await(), orders.await())
+            } catch (e: CancellationException) {
+                throw e                          // ⚠️ 取消异常必须重抛
+            } catch (e: Exception) {
+                _state.value = UiState.Error(e.message ?: "未知错误")
+            }
+        }
+    }
+}
+```
+
+<Callout type="warn">
+
+注意那个 `catch (e: CancellationException) { throw e }`——
+取消信号必须让它继续往上传播，否则结构化并发就被破坏了。详见
+[8.8 异常处理](/docs/08-coroutines/exception-handling)。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>launch</code> 和 <code>async</code> 的核心区别是什么？
+    </>
+  }
+  options={[
+    'launch 更快',
+    'launch 返回 Job 不关心结果、异常立刻传播；async 返回 Deferred 需要 await 取结果、异常在 await 时抛出',
+    'async 只能用于 IO',
+    'launch 不能并发',
+  ]}
+  answer={1}
+>
+
+两者都启动并发协程，区别在**结果**和**异常时机**：
+
+| | `launch` | `async` |
+| --- | --- | --- |
+| 返回 | `Job` | `Deferred<T>` |
+| 取结果 | 无 | `await()` |
+| 异常 | **立刻**传给父协程 | **`await()` 时**才抛 |
+
+异常时机这条很关键：`async { throw ... }` 之后如果从不 `await`，
+异常可能被静默吞掉。
+
+规则：**需要返回值才用 `async`，且必须配对 `await`；否则用 `launch`。**
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么 <code>GlobalScope.launch</code> 是反模式？
+    </>
+  }
+  options={[
+    '性能差',
+    '它不绑定任何生命周期，无法自动取消，页面关闭后仍在运行，必然泄漏',
+    '它只能在主线程运行',
+    '它已被删除',
+  ]}
+  answer={1}
+>
+
+`GlobalScope` 的生命周期是**整个进程**——这等于放弃了结构化并发的全部好处：
+
+- 页面关闭后协程继续跑
+- 没有作用域能取消它
+- 持有的 View / Context 无法回收
+
+正确做法：
+
+- 绑定到有意义的生命周期：`viewModelScope`、`lifecycleScope`
+- 确实需要「比页面活得久」的任务（上传、同步）→ **WorkManager**，
+  它能跨进程重启、有重试策略，比 GlobalScope 可靠得多
+- 应用级的长期任务 → 自己建一个 Application 作用域并注入
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="什么是 main-safety（主线程安全）原则？"
+  options={[
+    '所有代码都在主线程运行',
+    '挂起函数应该自己用 withContext 切到正确的线程，调用方不需要关心它在哪跑',
+    '不能在主线程调用挂起函数',
+    '必须给每个协程指定 Dispatcher',
+  ]}
+  answer={1}
+>
+
+**责任在被调用方，不在调用方**：
+
+```
+// ❌ 泄漏了实现细节，调用方必须知道「这个函数是阻塞 IO」
+suspend fun getUser(): User = api.fetch()
+viewModelScope.launch(Dispatchers.IO) { getUser() }
+
+// ✅ 函数自己保证，调用方随便在哪调都安全
+suspend fun getUser(): User = withContext(Dispatchers.IO) { api.fetch() }
+viewModelScope.launch { getUser() }
+```
+
+好处：调用方（通常是 ViewModel）不需要了解 Repository 的实现细节；
+将来实现从网络换成内存缓存，调用方不用改。
+
+这是 Android 官方架构指南明确推荐的做法。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      Fragment 里收集 Flow，应该用哪个作用域？
+    </>
+  }
+  options={[
+    'lifecycleScope',
+    'viewLifecycleOwner.lifecycleScope',
+    'GlobalScope',
+    'viewModelScope',
+  ]}
+  answer={1}
+>
+
+`viewLifecycleOwner.lifecycleScope`。
+
+原因是 **Fragment 实例的生命周期比它的 View 长**：Fragment 被放进返回栈时，
+View 被销毁但 Fragment 实例还在。
+
+用 `lifecycleScope`（绑定 Fragment 实例）会导致 View 销毁后协程仍在运行，
+往已经销毁的 View 上设值 → 崩溃或泄漏。
+
+完整的正确写法还要配 `repeatOnLifecycle`：
+
+```
+viewLifecycleOwner.lifecycleScope.launch {
+    repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.state.collect { render(it) }
+    }
+}
+```
+
+这样在页面不可见时会停止收集，回到前台自动恢复。
+
+</Quiz>
 
 ## 官方参考
 
