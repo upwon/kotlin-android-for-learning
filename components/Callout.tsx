@@ -31,12 +31,18 @@ const STYLES: Record<
     surface: 'border-amber-200/80 bg-amber-50/50 dark:border-amber-900/60 dark:bg-amber-950/25',
     accent: 'text-amber-600 dark:text-amber-400',
   },
+  /*
+    「结论」用主题色本身，不再单独占一个绿。
+    主题色现在是松绿，再给结论框配一个 emerald，页面上就会出现两种很近的绿
+    ——读者分不清哪个是「站点的强调色」哪个是「一种语义」。
+    结论框本来就是全站最该被强调的一类，让它和主题色同源反而更成立。
+    换主题色时这里会自动跟着走，不用改。
+  */
   success: {
     Icon: CheckIcon,
     label: '结论',
-    surface:
-      'border-emerald-200/80 bg-emerald-50/50 dark:border-emerald-900/60 dark:bg-emerald-950/25',
-    accent: 'text-emerald-600 dark:text-emerald-400',
+    surface: 'border-accent-200/80 bg-accent-50/50 dark:border-accent-900/60 dark:bg-accent-950/25',
+    accent: 'text-accent-600 dark:text-accent-400',
   },
   java: {
     Icon: CoffeeIcon,

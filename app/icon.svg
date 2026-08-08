@@ -4,7 +4,7 @@
   换主题色时一并改这一处（SVG 读不到 CSS 变量）。
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <rect width="64" height="64" rx="14" fill="#127f89" />
+  <rect width="64" height="64" rx="14" fill="#218456" />
   <path
     d="M20 16h7v14.5L40.5 16H49L34.5 31.6 49 48h-9.2L27 33.8V48h-7z"
     fill="#fff"
