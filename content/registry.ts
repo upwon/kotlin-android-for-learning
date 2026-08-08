@@ -55,10 +55,12 @@ export const registry: Record<string, () => Promise<MdxModule>> = {
   "08-coroutines/channels": () => import("./08-coroutines/channels.mdx"),
   "08-coroutines/exception-handling": () => import("./08-coroutines/exception-handling.mdx"),
   "08-coroutines/shared-mutable-state": () => import("./08-coroutines/shared-mutable-state.mdx"),
+  "08-coroutines/callback-interop": () => import("./08-coroutines/callback-interop.mdx"),
   "09-advanced/annotations": () => import("./09-advanced/annotations.mdx"),
   "09-advanced/reflection": () => import("./09-advanced/reflection.mdx"),
   "09-advanced/destructuring": () => import("./09-advanced/destructuring.mdx"),
   "09-advanced/type-safe-builders": () => import("./09-advanced/type-safe-builders.mdx"),
+  "09-advanced/context-parameters": () => import("./09-advanced/context-parameters.mdx"),
   "appendix/java-to-kotlin": () => import("./appendix/java-to-kotlin.mdx"),
   "appendix/further-reading": () => import("./appendix/further-reading.mdx"),
 }

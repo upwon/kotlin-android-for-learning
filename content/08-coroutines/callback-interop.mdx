@@ -1,0 +1,405 @@
+Android SDK 里绝大多数异步 API 都是**回调式**的——`LocationManager`、`SensorManager`、
+`MediaPlayer`、各种老的第三方 SDK。想在协程世界里用它们，就得自己搭桥。
+这一课讲的两个函数是 Android 上协程落地的**必备技能**。
+
+## 1. 两个工具，对应两种形态
+
+| 回调形态 | 用什么 | 产出 |
+| --- | --- | --- |
+| **回调一次**就结束（一次性请求） | `suspendCancellableCoroutine` | `suspend fun` |
+| **回调多次**（监听、订阅、流式） | `callbackFlow` | `Flow<T>` |
+
+## 2. suspendCancellableCoroutine：一次性回调
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+// 模拟一个回调式 API
+class LegacyApi {
+    fun fetch(id: String, onSuccess: (String) -> Unit, onError: (Throwable) -> Unit) {
+        Thread {
+            Thread.sleep(100)
+            if (id.isBlank()) onError(IllegalArgumentException("id 不能为空"))
+            else onSuccess("数据-$id")
+        }.start()
+    }
+}
+
+// 桥接成挂起函数
+suspend fun LegacyApi.fetchSuspend(id: String): String =
+    suspendCancellableCoroutine { cont ->
+        fetch(
+            id = id,
+            onSuccess = { cont.resume(it) },
+            onError = { cont.resumeWithException(it) },
+        )
+    }
+
+fun main() = runBlocking {
+    val api = LegacyApi()
+    println(api.fetchSuspend("42"))
+    println(runCatching { api.fetchSuspend("") }.exceptionOrNull()?.message)
+}
+```
+
+`cont.resume(value)` 恢复协程并返回值，`cont.resumeWithException(e)` 让调用处抛异常——
+于是调用方可以用普通的 `try/catch`。
+
+<Callout type="warn" title="必须处理取消：invokeOnCancellation">
+
+上面的版本有个问题：协程被取消时，那个回调仍然在后台跑，结果没人要了，
+更糟的是底层请求没有被取消。
+
+```kt
+suspend fun ApiClient.fetchSuspend(id: String): String =
+    suspendCancellableCoroutine { cont ->
+        val call = enqueue(id, onSuccess = { cont.resume(it) },
+                               onError = { cont.resumeWithException(it) })
+
+        cont.invokeOnCancellation {
+            call.cancel()          // ← 协程取消时，把底层请求也取消掉
+        }
+    }
+```
+
+**这就是用 `suspendCancellableCoroutine` 而不是 `suspendCoroutine` 的理由。**
+后者不支持取消，桥接出来的挂起函数会成为「取消不了的黑洞」，
+破坏整棵协程树的结构化并发。
+
+**除非你能证明底层操作真的无法取消，否则一律用 `suspendCancellableCoroutine`。**
+
+</Callout>
+
+<Callout type="warn" title="resume 只能调用一次">
+
+```kt
+// ❌ 回调可能被调多次时，第二次 resume 会抛 IllegalStateException
+suspendCancellableCoroutine { cont ->
+    listener.onEvent = { cont.resume(it) }    // 事件来第二次就崩
+}
+```
+
+`Continuation` 是一次性的。回调会触发多次的场景，说明你需要的是 `callbackFlow`。
+
+如果只是**可能**重复（比如 SDK 有 bug），可以用 `cont.isActive` 守一下：
+
+```kt
+if (cont.isActive) cont.resume(value)
+```
+
+</Callout>
+
+## 3. callbackFlow：多次回调
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.*
+
+// 模拟一个会持续回调的监听器
+class Ticker {
+    private var running = false
+    fun start(onTick: (Int) -> Unit) {
+        running = true
+        Thread {
+            var i = 0
+            while (running && i < 5) {
+                Thread.sleep(50)
+                onTick(i++)
+            }
+        }.start()
+    }
+    fun stop() { running = false }
+}
+
+fun Ticker.ticks(): Flow<Int> = callbackFlow {
+    start { value -> trySend(value) }        // 回调里发射
+
+    awaitClose {                              // 收集停止时执行清理
+        stop()
+        println("  已注销监听")
+    }
+}
+
+fun main() = runBlocking {
+    Ticker().ticks().take(3).collect { println("收到 $it") }
+    println("完成")
+}
+```
+
+<Callout type="warn" title="awaitClose 不是可选的">
+
+`callbackFlow` 的 builder **必须**以 `awaitClose { }` 结尾，
+否则会抛 `IllegalStateException: 'awaitClose { yourCallbackOrListener.cancel() }'
+should be used in the end of callbackFlow block`。
+
+它做两件事：
+
+1. **挂起**当前协程，让 Flow 保持活跃（否则 builder 一执行完 Flow 就结束了）
+2. 收集者取消时执行**清理**——注销监听器、关闭连接
+
+忘了注销监听器就是**内存泄漏**，这是 `callbackFlow` 存在的核心价值。
+
+</Callout>
+
+<Callout type="tip" title="trySend 而不是 send">
+
+`send` 是挂起函数，只能在协程里调用；而回调通常在**别的线程**、非协程上下文中触发。
+
+`trySend` 是非挂起的，可以在任何地方调用，缓冲区满时返回失败（默认容量 64）。
+需要控制背压时可以给 `callbackFlow` 传 `buffer(...)` 或用 `conflate()`。
+
+</Callout>
+
+## 4. Android 实战
+
+**位置更新**：
+
+```kt
+@SuppressLint("MissingPermission")
+fun FusedLocationProviderClient.locationFlow(request: LocationRequest): Flow<Location> =
+    callbackFlow {
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let { trySend(it) }
+            }
+        }
+        requestLocationUpdates(request, callback, Looper.getMainLooper())
+
+        awaitClose { removeLocationUpdates(callback) }   // 必须注销
+    }
+```
+
+**传感器**：
+
+```kt
+fun SensorManager.sensorFlow(type: Int): Flow<FloatArray> = callbackFlow {
+    val sensor = getDefaultSensor(type) ?: run {
+        close(IllegalStateException("设备不支持该传感器"))
+        return@callbackFlow
+    }
+    val listener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) { trySend(event.values.clone()) }
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+    registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+
+    awaitClose { unregisterListener(listener) }
+}
+```
+
+**View 事件转 Flow**：
+
+```kt
+fun EditText.textChanges(): Flow<String> = callbackFlow {
+    val watcher = object : TextWatcher {
+        override fun afterTextChanged(s: Editable?) { trySend(s?.toString().orEmpty()) }
+        override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+    }
+    addTextChangedListener(watcher)
+
+    awaitClose { removeTextChangedListener(watcher) }
+}
+
+// 用起来：搜索防抖一气呵成
+binding.searchInput.textChanges()
+    .debounce(300)
+    .filter { it.length >= 2 }
+    .flatMapLatest { repository.search(it) }
+    .flowOn(Dispatchers.IO)
+    .launchIn(viewLifecycleOwner.lifecycleScope)
+```
+
+**一次性回调**：
+
+```kt
+suspend fun MediaPlayer.prepareSuspend(): Unit =
+    suspendCancellableCoroutine { cont ->
+        setOnPreparedListener { cont.resume(Unit) }
+        setOnErrorListener { _, what, extra ->
+            cont.resumeWithException(IOException("准备失败 $what/$extra"))
+            true
+        }
+        prepareAsync()
+        cont.invokeOnCancellation { reset() }
+    }
+```
+
+## 5. 已经有现成适配的别自己写
+
+<Callout type="success">
+
+很多库已经提供了协程适配，**先查再动手**：
+
+| 库 | 适配方式 |
+| --- | --- |
+| Retrofit | 直接把接口方法声明成 `suspend fun` |
+| Room | `suspend fun` DAO 方法 / 返回 `Flow` |
+| OkHttp | `kotlinx-coroutines-jdk8` 的 `await()`，或社区扩展 |
+| Google Play Services（`Task<T>`） | `kotlinx-coroutines-play-services` 的 `Task.await()` |
+| RxJava | `kotlinx-coroutines-rx3` 的 `Single.await()` / `Observable.asFlow()` |
+| Guava `ListenableFuture` | `kotlinx-coroutines-guava` 的 `await()` |
+| DataStore | 原生就是 `Flow` |
+
+```kt
+// Firebase / Play Services
+val user = FirebaseAuth.getInstance().signInAnonymously().await()
+```
+
+自己写桥接容易漏掉取消处理，能用官方适配就用。
+
+</Callout>
+
+## 6. 反向：协程转回调
+
+给 Java 侧或旧代码提供接口时会用到：
+
+```kt
+class UserRepository(private val scope: CoroutineScope) {
+
+    suspend fun getUser(id: String): User = /* ... */
+
+    // 给 Java 调用的回调版本
+    fun getUser(id: String, callback: (Result<User>) -> Unit): Job =
+        scope.launch {
+            val result = try {
+                Result.success(getUser(id))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            callback(result)
+        }
+}
+```
+
+返回 `Job` 让调用方能取消——这是回调式 API 通常缺失的能力。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      为什么要用 <code>suspendCancellableCoroutine</code> 而不是 <code>suspendCoroutine</code>？
+    </>
+  }
+  options={[
+    '前者性能更好',
+    '前者支持取消：可以用 invokeOnCancellation 在协程取消时清理底层资源、取消底层请求',
+    '后者已被废弃',
+    '两者完全一样',
+  ]}
+  answer={1}
+>
+
+`suspendCoroutine` 桥接出来的挂起函数**无法响应取消**——协程被取消了，
+底层的网络请求、监听器还在跑，结果没人接收，资源也没释放。
+
+更严重的是它破坏了整棵协程树的结构化并发：父作用域取消时，这个协程会卡在那里不结束。
+
+`suspendCancellableCoroutine` 提供了 `cont.invokeOnCancellation { }` 回调：
+
+```
+cont.invokeOnCancellation { call.cancel() }
+```
+
+**除非能证明底层操作真的无法取消，否则一律用可取消版本。**
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>callbackFlow</code> 里忘了写 <code>awaitClose</code> 会怎样？
+    </>
+  }
+  options={[
+    '没有影响',
+    '抛 IllegalStateException；而且即使不抛，监听器也不会被注销，造成内存泄漏',
+    'Flow 会一直发射',
+    '编译错误',
+  ]}
+  answer={1}
+>
+
+`callbackFlow` 强制要求 builder 以 `awaitClose { }` 结尾，
+否则运行时抛 `IllegalStateException`。
+
+它承担两个职责：
+
+1. **挂起**当前协程，让 Flow 保持活跃——否则 builder 执行完 Flow 就结束了，
+   后续回调发射的值没人收
+2. 收集者取消时执行**清理**——`removeLocationUpdates`、`unregisterListener`、
+   `removeTextChangedListener`
+
+第 2 条才是关键：注册了监听器却不注销，就是 Android 上最经典的内存泄漏。
+`awaitClose` 把注销时机和 Flow 的生命周期绑在了一起。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      在 <code>callbackFlow</code> 的回调里，为什么用 <code>trySend</code> 而不是 <code>send</code>？
+    </>
+  }
+  options={[
+    'trySend 更快',
+    'send 是挂起函数只能在协程里调用，而回调通常在别的线程、非协程上下文中触发',
+    'send 已被废弃',
+    '两者可以互换',
+  ]}
+  answer={1}
+>
+
+`send` 是 `suspend` 函数——只能在协程上下文里调用。而回调是由第三方库触发的，
+可能在任意线程、完全不在协程里，根本没法调用挂起函数。
+
+`trySend` 是非挂起版本：立刻尝试发送，缓冲区满时返回失败（不阻塞、不抛异常）。
+
+默认缓冲区容量是 64。数据量大时可以：
+
+- 给 `callbackFlow` 加 `.buffer(capacity)` 调整
+- 用 `.conflate()` 只保留最新值（传感器、位置这类 UI 场景常用）
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="需要把 Firebase 的 Task<T> 转成挂起函数，最好怎么做？"
+  options={[
+    '自己写 suspendCancellableCoroutine',
+    '引入 kotlinx-coroutines-play-services，直接用 Task.await()',
+    '用 runBlocking 等待',
+    '用 Thread.sleep 轮询',
+  ]}
+  answer={1}
+>
+
+**先查有没有现成适配**。Google Play Services 的 `Task<T>` 有官方协程扩展：
+
+```
+implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services")
+
+val user = FirebaseAuth.getInstance().signInAnonymously().await()
+```
+
+同类的还有：RxJava（`kotlinx-coroutines-rx3`）、Guava `ListenableFuture`
+（`kotlinx-coroutines-guava`）、JDK8 `CompletableFuture`。
+
+自己写桥接最容易漏的就是 `invokeOnCancellation`——官方适配已经处理好了取消传播、
+异常映射这些细节。**能用现成的就别自己造。**
+
+</Quiz>
+
+## 官方参考
+
+- 官方中文：[flow](https://book.kotlincn.net/text/flow.html)
+- 官方英文：[flow](https://kotlinlang.org/docs/flow.html) ／ [Android 上的协程最佳实践](https://developer.android.com/kotlin/coroutines/coroutines-adv)

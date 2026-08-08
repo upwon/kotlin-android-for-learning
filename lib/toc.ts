@@ -428,6 +428,14 @@ export const toc: Part[] = [
         summary: "协程里的线程安全问题依然存在。",
         deep: true,
       },
+      {
+        title: "回调与协程互操作",
+        num: "8.10",
+        slug: "08-coroutines/callback-interop",
+        summary: "把回调式 API 桥接成挂起函数与 Flow。",
+        deep: true,
+        star: true,
+      },
     ],
   },
   {
@@ -460,6 +468,13 @@ export const toc: Part[] = [
         num: "9.4",
         slug: "09-advanced/type-safe-builders",
         summary: "带接收者的 lambda 撑起 Kotlin DSL。",
+        deep: true,
+      },
+      {
+        title: "context parameters（Kotlin 2.2）",
+        num: "9.5",
+        slug: "09-advanced/context-parameters",
+        summary: "让依赖不进参数列表，也不绑定到类上。",
         deep: true,
       },
     ],

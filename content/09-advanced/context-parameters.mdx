@@ -1,0 +1,279 @@
+Kotlin 2.2 引入的新特性（替代了实验多年的 context receivers）。
+它解决一个很具体的问题：**某些依赖需要「一路传下去」，但写成参数太吵、写成成员又不对**。
+Android 上典型的就是 `Context`、`Logger`、`CoroutineScope`。
+
+<Callout type="warn" title="它还很新">
+
+`context parameters` 在 Kotlin 2.2 中作为**预览特性**引入，需要显式开启：
+
+```kt
+kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-Xcontext-parameters")
+    }
+}
+```
+
+在它稳定之前，**生产代码里请谨慎使用**。这一课的目的是让你在读到相关代码或
+库 API 时不至于陌生，以及理解它想解决什么问题。
+
+</Callout>
+
+## 1. 问题：依赖的三种传法都不理想
+
+假设你有一个 `Logger`，很多函数都要用：
+
+```kotlin
+class Logger(private val tag: String) {
+    fun log(msg: String) = println("[$tag] $msg")
+}
+
+// 方式 1：当参数传 —— 每一层都要写，签名被污染
+fun loadUser(id: String, logger: Logger): String {
+    logger.log("加载 $id")
+    return "User#$id"
+}
+
+// 方式 2：当类成员 —— 强迫这段逻辑必须依附一个类
+class UserService(private val logger: Logger) {
+    fun loadUser(id: String) = "User#$id".also { logger.log("加载 $id") }
+}
+
+// 方式 3：全局单例 —— 不可测试，隐式依赖
+object GlobalLogger { fun log(msg: String) = println(msg) }
+
+fun main() {
+    println(loadUser("1", Logger("APP")))
+    println(UserService(Logger("SVC")).loadUser("2"))
+}
+```
+
+三种都能用，但都有代价：**参数污染签名**、**成员绑定生命周期**、**单例不可测**。
+
+## 2. context parameters 的写法
+
+```kt
+class Logger(private val tag: String) {
+    fun log(msg: String) = println("[$tag] $msg")
+}
+
+// 声明一个上下文参数：调用方必须在「有 Logger 的作用域」里调用
+context(logger: Logger)
+fun loadUser(id: String): String {
+    logger.log("加载 $id")
+    return "User#$id"
+}
+
+// 调用方用 with 提供上下文
+fun main() {
+    with(Logger("APP")) {
+        println(loadUser("1"))      // 不用传 logger
+    }
+}
+```
+
+关键点：
+
+- `context(名字: 类型)` 声明在函数（或属性）**前面**
+- **不出现在参数列表里**，所以不污染签名
+- 调用时上下文必须**在作用域内可用**（通常靠 `with`），否则编译报错
+
+<Callout type="tip" title="和扩展函数的接收者有什么不同">
+
+扩展函数 `fun Logger.loadUser(id: String)` 也能达到类似效果，但：
+
+| | 扩展接收者 | context parameter |
+| --- | --- | --- |
+| 数量 | **只能有一个** | 可以有多个 |
+| 语义 | 「这是 Logger 的一个方法」 | 「这个函数需要一个 Logger 才能工作」 |
+| 调用形式 | `logger.loadUser(id)` | `loadUser(id)` |
+
+第二条是关键：`loadUser` 在概念上**不是** `Logger` 的方法，
+把它写成 `Logger` 的扩展是语义错位。
+
+</Callout>
+
+## 3. 多个上下文
+
+这是它相对扩展函数的真正优势：
+
+```kt
+class Logger(val tag: String)
+class Database
+class Analytics
+
+context(logger: Logger, db: Database, analytics: Analytics)
+suspend fun saveUser(user: User) {
+    logger.log("保存 ${user.id}")
+    db.insert(user)
+    analytics.track("user_saved")
+}
+```
+
+扩展函数做不到——一个函数只能有一个接收者。
+
+## 4. Android 上的潜在用途
+
+<Callout type="tip" title="Context 的传递">
+
+```kt
+context(context: Context)
+fun Int.dpToPx(): Int = (this * context.resources.displayMetrics.density).toInt()
+
+context(context: Context)
+fun showToast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+
+// Activity 里
+class MainActivity : AppCompatActivity() {
+    fun setup() = with(this as Context) {
+        showToast("你好")
+        val px = 16.dpToPx()
+    }
+}
+```
+
+对比现状：现在这类工具函数通常写成 `Context` 的扩展
+（`fun Context.toast(...)`），但那样 `Context` 就「占掉」了接收者位置——
+想再给 `Int` 加 `dpToPx` 扩展就没法同时拿到 Context 了。
+
+</Callout>
+
+<Callout type="tip" title="作用域内的能力标记">
+
+```kt
+// 只有在 CoroutineScope 上下文里才能调用
+context(scope: CoroutineScope)
+fun startPolling(intervalMs: Long) {
+    scope.launch {
+        while (isActive) {
+            poll()
+            delay(intervalMs)
+        }
+    }
+}
+```
+
+这让「这个函数需要一个协程作用域」变成**编译期约束**，
+而不是靠文档或者 `GlobalScope` 兜底。
+
+</Callout>
+
+## 5. 与 DSL 的关系
+
+`@DslMarker`（见 [9.4](/docs/09-advanced/type-safe-builders)）解决的是
+「隐式接收者太多、容易串味」；context parameters 解决的是
+「某些依赖需要显式声明但不想进参数列表」。
+
+两者可以配合，但目的不同：
+
+| | 隐式接收者（`T.() -> Unit`） | context parameter |
+| --- | --- | --- |
+| 目的 | 构建**结构**（DSL 树） | 传递**依赖** |
+| 是否命名 | 匿名的 `this` | **有名字**，不会歧义 |
+| 数量 | 嵌套时层层遮蔽 | 多个并列，各有名字 |
+
+<Callout type="success">
+
+context parameters **有名字**这一点很重要——它避开了 context receivers
+（旧实验特性）最大的问题：多个匿名 `this` 互相遮蔽，读代码时根本分不清
+某个方法来自哪一层。这也是旧方案被推倒重做的原因。
+
+</Callout>
+
+## 6. 现在该不该用
+
+<Callout type="warn">
+
+**暂时不建议在生产代码里用。** 理由：
+
+1. 还是预览特性，需要编译器开关，API 可能变
+2. 团队里大多数人没见过，可读性成本高
+3. 绝大多数场景，**构造函数注入**（配合 Hilt）已经足够好
+
+真正适合它的场景比较窄：写**库**、或者确实存在「一路透传、层层都要用」的横切依赖
+（日志、埋点、事务上下文）。
+
+普通业务代码里，`class UserService @Inject constructor(private val logger: Logger)`
+仍然是更好的答案——它简单、可测试、团队都懂。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question="context parameters 相对扩展函数接收者的核心优势是什么？"
+  options={[
+    '性能更好',
+    '可以同时声明多个上下文，而扩展函数只能有一个接收者',
+    '语法更简洁',
+    '不需要编译器支持',
+  ]}
+  answer={1}
+>
+
+一个函数只能有**一个**扩展接收者，但可以有**多个** context parameters：
+
+```
+context(logger: Logger, db: Database, analytics: Analytics)
+suspend fun saveUser(user: User) { ... }
+```
+
+另一个（更重要的）区别是**语义**：`fun Logger.loadUser(id)` 在说
+「loadUser 是 Logger 的一个方法」，这通常是错位的；
+context parameter 在说「loadUser 需要一个 Logger 才能工作」——后者才是真实意图。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="context parameters 相比旧的 context receivers 改进了什么？"
+  options={[
+    '性能更好',
+    '上下文参数有名字，避免了多个匿名 this 互相遮蔽、读代码时分不清来源的问题',
+    '不需要编译器开关',
+    '支持更多类型',
+  ]}
+  answer={1}
+>
+
+旧的 context receivers 把上下文当成额外的**匿名隐式接收者**——多个上下文嵌套时，
+`this` 层层遮蔽，读代码时根本看不出某个方法来自哪一层。
+
+context parameters 给每个上下文**起了名字**（`context(logger: Logger)`），
+使用时写 `logger.log(...)`，来源一目了然。
+
+这个可读性问题正是旧方案被推倒重做的主要原因。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="现在（Kotlin 2.2）该在 Android 生产代码里用 context parameters 吗？"
+  options={[
+    '应该，这是未来方向',
+    '暂时不建议：还是预览特性需要编译器开关，团队认知成本高，且多数场景构造函数注入已经够好',
+    '完全不能用',
+    '只能用在测试代码里',
+  ]}
+  answer={1}
+>
+
+三个理由：
+
+1. **预览特性**——需要 `-Xcontext-parameters` 开关，API 还可能变
+2. **认知成本**——团队里大多数人没见过，code review 会卡住
+3. **已有更好的答案**——业务代码里 `@Inject constructor(private val logger: Logger)`
+   简单、可测试、人人都懂
+
+真正适合它的场景比较窄：写**库**，或者确实有「一路透传、每层都要用」的横切依赖
+（日志、埋点、事务上下文）。
+
+了解它是为了读得懂别人的代码，不是为了马上用上。
+
+</Quiz>
+
+## 官方参考
+
+- 官方英文：[context-parameters](https://kotlinlang.org/docs/context-parameters.html)
+- [KEEP 提案](https://github.com/Kotlin/KEEP/blob/master/proposals/context-parameters.md)
