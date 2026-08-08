@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useId, useRef, useState } from 'react'
+import { PlayIcon } from '@/components/icons'
 import { currentResolvedTheme, subscribeToTheme, type ResolvedTheme } from '@/lib/theme'
 
 // JetBrains 官方的 Kotlin Playground。
@@ -121,10 +122,18 @@ export function Runnable({
 
   return (
     <div className="not-prose my-6">
-      <div className="mb-1.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-        <span className="font-mono font-semibold text-slate-600 dark:text-slate-300">Kotlin</span>
-        {!highlightOnly && status !== 'error' && <span>· 可以直接改代码并运行 ▶</span>}
-        {status === 'error' && <span className="text-amber-600 dark:text-amber-400">· 运行环境加载失败，以下为静态代码</span>}
+      {/*
+        标签刻意做轻：一页里有近十个代码块，每个都重复一句完整说明会盖过内容本身。
+        「可运行」用一个图标标记就够，出错时才升级成文字。
+      */}
+      <div className="mb-1.5 flex items-center gap-1.5 text-[0.6875rem] text-slate-400 dark:text-slate-500">
+        <span className="font-medium tracking-wide">Kotlin</span>
+        {!highlightOnly && status !== 'error' && (
+          <PlayIcon size={9} className="text-emerald-600 dark:text-emerald-500" aria-label="可运行" />
+        )}
+        {status === 'error' && (
+          <span className="text-amber-600 dark:text-amber-400">· 运行环境未就绪，以下为静态代码</span>
+        )}
       </div>
       {/*
         用 dangerouslySetInnerHTML 把这块 DOM「交给」kotlin-playground：

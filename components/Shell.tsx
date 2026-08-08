@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState, type ReactNode } from 'react'
 import Sidebar from '@/components/Sidebar'
 import ThemeToggle from '@/components/ThemeToggle'
+import { CloseIcon, ExternalIcon, MenuIcon } from '@/components/icons'
 
 export function Shell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false)
@@ -23,9 +24,9 @@ export function Shell({ children }: { children: ReactNode }) {
           onClick={() => setOpen((v) => !v)}
           aria-label="切换章节导航"
           aria-expanded={open}
-          className="rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-600 lg:hidden dark:border-slate-700 dark:text-slate-300"
+          className="-ml-1 rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 lg:hidden dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
         >
-          ☰
+          {open ? <CloseIcon size={18} /> : <MenuIcon size={18} />}
         </button>
 
         <Link href="/" className="flex items-baseline gap-2">
@@ -40,9 +41,10 @@ export function Shell({ children }: { children: ReactNode }) {
             href="https://kotlinlang.org/docs/home.html"
             target="_blank"
             rel="noreferrer"
-            className="hidden text-xs text-slate-500 hover:text-slate-800 sm:inline dark:text-slate-400 dark:hover:text-slate-100"
+            className="hidden items-center gap-1 text-xs text-slate-500 transition-colors hover:text-slate-900 sm:flex dark:text-slate-400 dark:hover:text-slate-100"
           >
-            官方文档 ↗
+            官方文档
+            <ExternalIcon size={12} />
           </a>
           <ThemeToggle />
         </div>
