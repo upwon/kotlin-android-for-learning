@@ -1,19 +1,324 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 9.3 解构声明」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+解构声明的语法很简单，但它有一个必须知道的性质：**按位置而不是按名字**。
+这带来了一个静默的重构风险。
+
+## 1. 基本用法
+
+```kotlin
+data class Point(val x: Int, val y: Int)
+
+fun main() {
+    val p = Point(3, 4)
+
+    val (x, y) = p           // 解构
+    println("$x, $y")
+
+    // 等价于
+    val x2 = p.component1()
+    val y2 = p.component2()
+    println("$x2, $y2")
+
+    // 用下划线跳过不需要的
+    val (_, onlyY) = p
+    println(onlyY)
+}
+```
+
+`data class` 会自动为主构造函数的每个参数生成 `componentN()`。
+
+## 2. 常见场景
+
+```kotlin
+fun main() {
+    // Map 遍历
+    val map = mapOf("a" to 1, "b" to 2)
+    for ((k, v) in map) print("$k=$v ")
+    println()
+
+    // 列表元素的解构
+    val points = listOf(1 to "one", 2 to "two")
+    points.forEach { (n, name) -> print("$n:$name ") }
+    println()
+
+    // withIndex
+    for ((index, value) in listOf("a", "b").withIndex()) print("$index=$value ")
+    println()
+
+    // 函数返回多个值
+    fun minMax(list: List<Int>) = (list.min()) to (list.max())
+    val (min, max) = minMax(listOf(3, 1, 4))
+    println("$min..$max")
+
+    // 集合的 partition
+    val (even, odd) = (1..6).partition { it % 2 == 0 }
+    println("$even $odd")
+}
+```
+
+## 3. 给自己的类加解构能力
+
+```kotlin
+class Rgb(val r: Int, val g: Int, val b: Int) {
+    operator fun component1() = r
+    operator fun component2() = g
+    operator fun component3() = b
+}
+
+fun main() {
+    val (r, g, b) = Rgb(255, 128, 0)
+    println("rgb($r, $g, $b)")
+}
+```
+
+也可以用**扩展函数**给别人的类加：
+
+```kotlin
+import java.time.LocalDate
+
+operator fun LocalDate.component1() = year
+operator fun LocalDate.component2() = monthValue
+operator fun LocalDate.component3() = dayOfMonth
+
+fun main() {
+    val (year, month, day) = LocalDate.of(2026, 8, 8)
+    println("$year-$month-$day")
+}
+```
+
+## 4. 按位置的风险
+
+<Callout type="warn" title="这是解构唯一真正危险的地方">
+
+```kt
+data class User(val name: String, val email: String)
+
+val (name, email) = user      // 正确
+
+// 某天有人重构，调整了参数顺序：
+data class User(val email: String, val name: String)
+
+val (name, email) = user      // ⚠️ 静默地反了！
+```
+
+因为两个字段类型相同，**编译器发现不了**，测试也未必覆盖到——
+只会表现为「用户名和邮箱显示反了」。
+
+三条建议：
+
+1. **超过 2~3 个字段的 data class 不要用解构**，直接 `user.name` 更安全
+2. 调整 data class 主构造函数参数顺序时，**全局搜一下解构用法**
+3. 类型不同的字段风险小（`val (name: String, age: Int)` 写反了会编译报错）
+
 </Callout>
 
-## 学习提纲
+## 5. lambda 参数解构
 
-- componentN 约定
-- data class 与 Map 遍历中的解构
-- lambda 参数解构
-- 下划线跳过不需要的分量
+```kotlin
+data class Item(val id: Int, val name: String, val price: Int)
 
-## 与 Java / Android 的关键差异
+fun main() {
+    val items = listOf(Item(1, "键盘", 299), Item(2, "鼠标", 99))
 
-按位置而非按名字解构，重排主构造函数参数会静默改变语义。
+    // 解构 lambda 参数
+    items.forEach { (id, name, price) -> println("$id: $name ¥$price") }
+
+    // 只要部分字段
+    items.forEach { (_, name, _) -> print("$name ") }
+    println()
+
+    // Map 的 lambda 参数本来就是 Entry，可以解构
+    mapOf("a" to 1).forEach { (k, v) -> println("$k -> $v") }
+
+    // 注意：解构参数要用括号包住，和多参数区分
+    val pairs = listOf(1 to "a")
+    pairs.map { (n, s) -> "$n$s" }.also { println(it) }        // 解构一个 Pair
+    pairs.mapIndexed { i, pair -> "$i:$pair" }.also { println(it) }  // 两个参数
+}
+```
+
+## 6. 解构与可空性
+
+```kotlin
+data class Config(val host: String, val port: Int)
+
+fun main() {
+    val config: Config? = Config("localhost", 8080)
+
+    // ❌ 不能直接解构可空对象
+    // val (host, port) = config
+
+    // ✅ 先处理空
+    config?.let { (host, port) -> println("$host:$port") }
+
+    val (host, port) = config ?: Config("default", 80)
+    println("$host:$port")
+}
+```
+
+## 7. Android 场景
+
+```kt
+// 从 ViewModel 拿多个状态
+val (isLoading, items, error) = viewModel.state.value
+
+// 尺寸计算
+data class Size(val width: Int, val height: Int)
+val (w, h) = calculateSize()
+
+// 权限请求结果
+permissions.forEach { (permission, granted) ->
+    if (!granted) showRationale(permission)
+}
+
+// Room 返回的关联查询
+data class UserWithPosts(val user: User, val posts: List<Post>)
+val (user, posts) = dao.getUserWithPosts(id)
+```
+
+<Callout type="tip" title="Compose 里的 remember 解构">
+
+```kt
+// 这不是解构声明，是 Kotlin 的属性委托
+var text by remember { mutableStateOf("") }
+
+// 这才是解构
+val (text, setText) = remember { mutableStateOf("") }
+TextField(value = text, onValueChange = setText)
+```
+
+`MutableState` 提供了 `component1()`（取值）和 `component2()`（setter 函数），
+所以能解构成「值 + 设值函数」。这在需要把 setter 传给子组件时很有用。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question="解构声明是按什么匹配的？"
+  options={[
+    '按变量名匹配对应的属性',
+    '按位置匹配 component1()、component2()…',
+    '按类型匹配',
+    '按声明顺序的字母序',
+  ]}
+  answer={1}
+>
+
+**按位置**。`val (a, b) = obj` 会被编译成
+`val a = obj.component1(); val b = obj.component2()`——
+变量叫什么名字完全不影响匹配。
+
+这带来一个静默风险：调整 data class 主构造函数的参数顺序后，
+所有解构用法都会**悄悄错位**，而类型相同的字段编译器发现不了。
+
+```
+data class User(val name: String, val email: String)
+val (name, email) = user       // 正确
+
+// 重构后：data class User(val email: String, val name: String)
+val (name, email) = user       // 静默反了！
+```
+
+建议：字段多于 2~3 个时别用解构，直接 `user.name`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      怎么给一个第三方库的类（比如 <code>LocalDate</code>）添加解构能力？
+    </>
+  }
+  options={[
+    '不可能，只能改源码',
+    '定义 operator 扩展函数 component1()、component2()…',
+    '继承它并重写',
+    '用反射',
+  ]}
+  answer={1}
+>
+
+用 **operator 扩展函数**：
+
+```
+operator fun LocalDate.component1() = year
+operator fun LocalDate.component2() = monthValue
+operator fun LocalDate.component3() = dayOfMonth
+
+val (year, month, day) = LocalDate.of(2026, 8, 8)
+```
+
+解构只依赖 `componentN()` 这个**约定**，不要求类是 data class，
+也不要求这些函数是成员——扩展函数完全可以。
+
+这也是为什么 `Map.Entry` 能被解构：标准库给它定义了
+`component1()` / `component2()` 扩展。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>list.map {'{'} (a, b) -&gt; ... {'}'}</code> 和
+      <code>list.mapIndexed {'{'} a, b -&gt; ... {'}'}</code> 的区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    '有括号的是把「一个」参数解构成两部分；没括号的是接收「两个」独立参数',
+    '括号只是风格问题',
+    '前者会编译错误',
+  ]}
+  answer={1}
+>
+
+**括号决定了语义**：
+
+- `{ (a, b) -> ... }` —— lambda 有**一个**参数，把它解构成 `a` 和 `b`。
+  用于 `map` 遍历 `Pair`、`Map.Entry` 等。
+- `{ a, b -> ... }` —— lambda 有**两个**参数。
+  用于 `mapIndexed`、`fold`、`reduce` 等本来就传两个值的函数。
+
+写错的话通常会编译报错（参数个数对不上），但在都是两个的情况下
+可能都能编译——这时候语义就完全不同了，要看清楚。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      Compose 里 <code>var text by remember {'{'} mutableStateOf("") {'}'}</code> 用的是解构吗？
+    </>
+  }
+  options={[
+    '是解构声明',
+    '不是，那是属性委托（by 关键字）；解构写法是 val (text, setText) = ...',
+    '两者是同一个东西',
+    'Compose 不支持解构',
+  ]}
+  answer={1}
+>
+
+`by` 是**属性委托**（见 [4.13 委托](/docs/04-classes/delegation)），
+不是解构。它让你像用普通变量一样读写 `text`。
+
+解构版本是：
+
+```
+val (text, setText) = remember { mutableStateOf("") }
+TextField(value = text, onValueChange = setText)
+```
+
+`MutableState` 同时提供了 `getValue`/`setValue`（供 `by` 用）和
+`component1()`/`component2()`（供解构用）。
+
+两种写法各有场景：`by` 更简洁，适合在当前作用域直接读写；
+解构能把 **setter 函数**单独传给子组件，适合状态提升。
+
+</Quiz>
 
 ## 官方参考
 

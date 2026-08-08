@@ -1,21 +1,337 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 9.2 反射」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Kotlin 反射比 Java 反射能力更强（能拿到属性、可空性、默认参数等 Kotlin 特有信息），
+但**在 Android 上代价很高**。这一课的重点是讲清楚代价，以及什么时候该用 KSP 替代。
+
+## 1. 两套反射 API
+
+```kotlin
+fun main() {
+    val s = "Kotlin"
+
+    // Java 反射
+    println(s.javaClass.simpleName)
+    println(s.javaClass.methods.size)
+
+    // Kotlin 反射
+    println(s::class.simpleName)
+    println(String::class.simpleName)
+
+    // 互转
+    println(String::class.java == s.javaClass)
+    println(s.javaClass.kotlin == String::class)
+}
+```
+
+<Callout type="warn" title="::class 和 ::class.java 的区别">
+
+- `Foo::class` → `KClass<Foo>`，Kotlin 的类引用
+- `Foo::class.java` → `Class<Foo>`，Java 的类引用
+
+调 Android/Java API 时基本都需要 `.java`：
+
+```kt
+Intent(this, DetailActivity::class.java)
+ViewModelProvider(this)[MyViewModel::class.java]
+```
+
 </Callout>
 
-## 学习提纲
+## 2. kotlin-reflect 是独立依赖
 
-- KClass 与 java.lang.Class 的互转
-- 函数引用与属性引用
-- kotlin-reflect 的体积代价
-- Android 上尽量用 KSP 替代反射
+```kt
+dependencies {
+    implementation("org.jetbrains.kotlin:kotlin-reflect:2.1.21")
+}
+```
 
-## 与 Java / Android 的关键差异
+<Callout type="warn" title="Android 上这个依赖不小">
 
-kotlin-reflect 是独立依赖且不小，Android 上要谨慎引入。
+`kotlin-reflect` 的 jar 约 **3MB**（未压缩），进 APK 后即使经过 R8 裁剪
+也是一笔可观的开销。
+
+**不需要这个依赖**的能力（属于标准库，随时可用）：
+
+- `::class.simpleName` / `qualifiedName`
+- `::class.java`
+- `obj is Foo` 类型检查
+- 函数引用 `::foo` 的调用
+- `reified` 泛型
+
+**需要它**的能力：
+
+- `memberProperties`、`declaredFunctions` 等成员遍历
+- `findAnnotation<T>()`
+- `createInstance()`、`primaryConstructor`
+- `KProperty` 的完整元信息
+
+日常 Android 开发**绝大多数情况不需要引入 kotlin-reflect**。
+
+</Callout>
+
+## 3. 能做什么
+
+```kotlin
+import kotlin.reflect.full.*
+
+data class User(val id: Long, val name: String, val email: String? = null)
+
+fun main() {
+    val kClass = User::class
+
+    println("类名：${kClass.simpleName}")
+    println("是 data class：${kClass.isData}")
+
+    println("属性：")
+    kClass.memberProperties.forEach { p ->
+        println("  ${p.name}: ${p.returnType}（可空=${p.returnType.isMarkedNullable}）")
+    }
+
+    println("主构造函数参数：")
+    kClass.primaryConstructor?.parameters?.forEach { p ->
+        println("  ${p.name} 有默认值=${p.isOptional}")
+    }
+
+    val u = User(1, "Summer")
+    val nameProp = kClass.memberProperties.first { it.name == "name" }
+    println("反射取值：${nameProp.get(u)}")
+}
+```
+
+<Callout type="tip" title="Kotlin 反射比 Java 反射多知道什么">
+
+| 信息 | Java 反射 | Kotlin 反射 |
+| --- | --- | --- |
+| 属性（而非 getter/setter） | ❌ | ✅ |
+| 可空性 | ❌（只有注解） | ✅ |
+| 参数是否有默认值 | ❌ | ✅ |
+| 是否 data class / object | ❌ | ✅ |
+| 泛型的实际类型参数 | 部分 | ✅ |
+
+这些额外信息存在类文件的 `@Metadata` 注解里，
+所以 Moshi、kotlinx.serialization 才能正确处理 Kotlin 的默认值和可空性。
+
+</Callout>
+
+## 4. 函数与属性引用
+
+```kotlin
+import kotlin.reflect.KMutableProperty0
+
+class Counter {
+    var count: Int = 0
+}
+
+fun triple(x: Int) = x * 3
+
+fun main() {
+    // 函数引用可以直接当函数用（不需要 kotlin-reflect）
+    println(listOf(1, 2, 3).map(::triple))
+
+    // 属性引用
+    val c = Counter()
+    val ref: KMutableProperty0<Int> = c::count
+    ref.set(42)
+    println("${ref.name} = ${ref.get()}")
+}
+```
+
+## 5. Android 上的替代方案：KSP
+
+<Callout type="success" title="需求 → 用 KSP 而不是反射">
+
+| 需求 | 反射方案 | KSP 方案 |
+| --- | --- | --- |
+| JSON 序列化 | Gson（反射） | Moshi codegen / kotlinx.serialization |
+| 依赖注入 | 运行时反射注入 | Hilt / Dagger（编译期生成） |
+| 数据库映射 | 反射读字段 | Room（编译期生成） |
+| 路由表 | 扫描 + 反射 | KSP 生成路由注册代码 |
+
+KSP 的优势：
+
+- **零运行时开销**——生成的是普通 Kotlin 代码
+- **编译期报错**——写错了立刻知道，不用等运行时
+- **R8 友好**——静态引用，不会被误裁剪，不需要 `@Keep`
+- **不需要 kotlin-reflect**——省 3MB
+
+</Callout>
+
+## 6. 真的需要反射时
+
+```kt
+// 场景：只在 debug build 里做的调试工具
+if (BuildConfig.DEBUG) {
+    dumpAllProperties(viewModel.state.value)
+}
+```
+
+<Callout type="tip">
+
+如果反射只在 debug 里用，可以只在 debug 变体引入依赖：
+
+```kt
+dependencies {
+    debugImplementation("org.jetbrains.kotlin:kotlin-reflect:2.1.21")
+}
+```
+
+这样 release 包完全不受影响。
+
+</Callout>
+
+另一类合理场景是**测试**：
+
+```kt
+// 测试里访问 private 成员，反射是可接受的
+@Test
+fun `内部状态应正确更新`() {
+    val vm = MyViewModel()
+    val field = MyViewModel::class.java.getDeclaredField("internalCache")
+    field.isAccessible = true
+    // ...
+}
+```
+
+单元测试跑在 JVM 上，不进 APK，没有体积和性能顾虑。
+
+## 7. 性能对比
+
+```kotlin
+import kotlin.reflect.full.memberProperties
+
+data class Point(val x: Int, val y: Int)
+
+fun main() {
+    val p = Point(1, 2)
+    val n = 100_000
+
+    val t1 = System.nanoTime()
+    repeat(n) { p.x + p.y }
+    val direct = System.nanoTime() - t1
+
+    val props = Point::class.memberProperties.toList()
+    val t2 = System.nanoTime()
+    repeat(n) { props.sumOf { prop -> prop.get(p) as Int } }
+    val viaReflection = System.nanoTime() - t2
+
+    println("直接访问：${direct / 1_000_000}ms")
+    println("反射访问：${viaReflection / 1_000_000}ms")
+    println("差距约 ${viaReflection / direct.coerceAtLeast(1)} 倍")
+}
+```
+
+<Callout type="warn">
+
+反射比直接访问慢**一到两个数量级**。放在 `onBindViewHolder`、
+`onDraw` 这类每秒调用几十上百次的地方，是能被用户感知到的卡顿。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      使用 <code>::class.simpleName</code> 需要引入 <code>kotlin-reflect</code> 依赖吗？
+    </>
+  }
+  options={[
+    '需要',
+    '不需要，基础的类引用能力在标准库里',
+    '只有 Android 上需要',
+    '取决于 Kotlin 版本',
+  ]}
+  answer={1}
+>
+
+**不需要**。基础的类引用能力（`::class`、`simpleName`、`qualifiedName`、
+`::class.java`、`is` 检查、函数引用调用、`reified`）都在标准库里。
+
+需要 `kotlin-reflect` 的是**完整反射**：
+
+- `memberProperties`、`declaredFunctions` 等成员遍历
+- `findAnnotation<T>()`
+- `primaryConstructor`、`createInstance()`
+
+区分这两类很重要——Android 上前者随便用，后者要慎重
+（依赖约 3MB，运行时也慢一到两个数量级）。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="Android 上为什么应该优先用 KSP 而不是运行时反射？"
+  options={[
+    'KSP 更容易写',
+    '零运行时开销、编译期报错、R8 友好不需要 @Keep、不用引入 kotlin-reflect',
+    'KSP 支持更多语言特性',
+    '反射在 Android 上不能用',
+  ]}
+  answer={1}
+>
+
+四条优势：
+
+1. **零运行时开销**——KSP 生成的是普通 Kotlin 代码，和手写的一样快
+2. **编译期报错**——注解用错了立刻知道，不用等运行到那一行
+3. **R8 友好**——生成的是静态引用，不会被误裁剪，不需要 `@Keep`
+4. **不需要 kotlin-reflect**——省约 3MB
+
+具体对应：JSON 用 Moshi codegen / kotlinx.serialization 而不是 Gson；
+DI 用 Hilt；数据库用 Room。这些库都是编译期生成代码的。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="Kotlin 反射相比 Java 反射，能多拿到哪些信息？"
+  options={[
+    '没有区别',
+    '属性（而非 getter/setter）、可空性、参数是否有默认值、是否 data class 等 Kotlin 特有信息',
+    '只是 API 更好用',
+    '能访问 private 成员',
+  ]}
+  answer={1}
+>
+
+这些额外信息存在类文件的 `@Metadata` 注解里：
+
+- **属性**：Java 反射只能看到 `getName()`/`setName()`，Kotlin 能看到 `name` 属性本身
+- **可空性**：`String` 还是 `String?`
+- **默认参数**：某个构造函数参数是否 `isOptional`
+- **类的种类**：是不是 data class、object、sealed
+
+正因为有这些，Moshi 和 kotlinx.serialization 才能正确处理 Kotlin 的默认值和
+非空校验——而 Gson（纯 Java 反射）做不到，这就是它绕过构造函数、
+让默认值失效的根本原因。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些是在 Android 上使用反射的合理场景？"
+  options={[
+    '单元测试里访问 private 成员',
+    '只在 debug build 启用的调试工具（用 debugImplementation 引依赖）',
+    'RecyclerView 的 onBindViewHolder 里动态读取字段',
+    'JSON 序列化',
+  ]}
+  answer={[0, 1]}
+>
+
+- **A**：单元测试跑在 JVM 上，不进 APK，没有体积和性能顾虑。
+- **B**：用 `debugImplementation("org.jetbrains.kotlin:kotlin-reflect")`
+  引依赖，release 包完全不受影响。
+
+**C 不行**：`onBindViewHolder` 是每秒调用几十次的热路径，
+反射比直接访问慢一到两个数量级，会造成可感知的卡顿。
+
+**D 不行**：应该用 Moshi codegen 或 kotlinx.serialization ——
+编译期生成，零运行时开销，还不用加 `@Keep`。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[reflection](https://book.kotlincn.net/text/reflection.html)
-- 官方英文：[reflection](https://kotlinlang.org/docs/reflection.html)
+- 官方英文：[reflection](https://kotlinlang.org/docs/reflection.html) ／ [ksp-overview](https://kotlinlang.org/docs/ksp-overview.html)

@@ -820,6 +820,7 @@ const parts = [
         ],
         javaNote: '属性会展开成字段+getter+setter，所以注解必须指明作用在谁身上。',
         official: 'annotations',
+        deep: true,
       },
       {
         num: '9.2',
@@ -829,6 +830,7 @@ const parts = [
         outline: ['KClass 与 java.lang.Class 的互转', '函数引用与属性引用', 'kotlin-reflect 的体积代价', 'Android 上尽量用 KSP 替代反射'],
         javaNote: 'kotlin-reflect 是独立依赖且不小，Android 上要谨慎引入。',
         official: 'reflection',
+        deep: true,
       },
       {
         num: '9.3',
@@ -838,6 +840,7 @@ const parts = [
         outline: ['componentN 约定', 'data class 与 Map 遍历中的解构', 'lambda 参数解构', '下划线跳过不需要的分量'],
         javaNote: '按位置而非按名字解构，重排主构造函数参数会静默改变语义。',
         official: 'destructuring-declarations',
+        deep: true,
       },
       {
         num: '9.4',
@@ -852,6 +855,7 @@ const parts = [
         ],
         javaNote: 'Gradle KTS 和 Compose 都建立在这套机制上，理解它才能读懂它们。',
         official: 'type-safe-builders',
+        deep: true,
       },
     ],
   },
@@ -866,6 +870,7 @@ const parts = [
         outline: ['字符串操作对照', '集合操作对照', '可空性与平台类型', '互操作注解速查（@JvmStatic/@JvmField/@JvmOverloads/@Throws）'],
         javaNote: '迁移时最常查的一页。',
         official: 'java-to-kotlin-interop',
+        deep: true,
       },
       {
         title: '扩展参考（仅链回官方）',
@@ -873,6 +878,7 @@ const parts = [
         summary: 'KMP / Native / JS / Wasm / Spring 等本站不覆盖的方向。',
         outline: ['本站的裁剪边界', '官方文档入口', '进一步学习的方向'],
         javaNote: '这些方向与 Android 原生学习目标关系不大，只留入口。',
+        deep: true,
       },
     ],
   },

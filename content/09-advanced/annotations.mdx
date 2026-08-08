@@ -1,21 +1,331 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 9.1 注解」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+注解本身和 Java 差不多，Kotlin 特有的是**使用处目标** use-site target——
+因为一个属性会展开成字段 + getter + setter，注解必须说明加在谁身上。
+这是 Android 上「注解不生效」的头号原因。
+
+## 1. 声明注解
+
+```kotlin
+@Target(AnnotationTarget.CLASS, AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Trackable(val name: String, val priority: Int = 0)
+
+@Trackable("登录页", priority = 1)
+class LoginScreen {
+    @Trackable("提交")
+    fun submit() {}
+}
+
+fun main() {
+    val anno = LoginScreen::class.java.getAnnotation(Trackable::class.java)
+    println("${anno?.name} 优先级 ${anno?.priority}")
+}
+```
+
+元注解：
+
+| 元注解 | 作用 |
+| --- | --- |
+| `@Target` | 能加在什么上（类、函数、属性、参数…） |
+| `@Retention` | 保留到什么阶段（`SOURCE` / `BINARY` / `RUNTIME`） |
+| `@Repeatable` | 同一处能否重复使用 |
+| `@MustBeDocumented` | 是否进入 API 文档 |
+
+<Callout type="warn">
+
+注解的参数只能是：基本类型、`String`、枚举、其他注解、`KClass`，以及这些的**数组**。
+不能是任意对象。
+
+`@Retention` 默认是 `RUNTIME`（Java 默认是 `CLASS`）。
+只给编译期用的注解应该显式标 `SOURCE`，能减少一点 APK 体积。
+
 </Callout>
 
-## 学习提纲
+## 2. 使用处目标：Kotlin 特有
 
-- 声明注解与元注解
-- 使用处目标 @get: / @field: / @param:
-- 与 kapt / KSP 的关系
-- Android 常见：@Parcelize、@Keep、@JvmStatic
+一个属性会生成多个 JVM 元素：
 
-## 与 Java / Android 的关键差异
+```kt
+class Dto(val userName: String)
 
-属性会展开成字段+getter+setter，所以注解必须指明作用在谁身上。
+// 编译后大致有：
+//   private final String userName;        ← field
+//   public String getUserName()           ← getter
+//   public Dto(String userName)           ← 构造函数参数（param）
+```
+
+所以注解要指明目标：
+
+```kt
+class Dto(
+    @field:SerializedName("user_name") val userName: String,   // 加在字段
+    @get:JvmName("isActive") val active: Boolean,              // 加在 getter
+    @param:Inject val id: String,                              // 加在构造参数
+    @property:MyAnno val other: String,                        // 加在 Kotlin 属性
+)
+```
+
+| 目标 | 作用于 |
+| --- | --- |
+| `field` | 幕后字段 |
+| `get` / `set` | getter / setter |
+| `param` | 构造函数参数 |
+| `property` | Kotlin 属性（Java 看不到） |
+| `receiver` | 扩展函数的接收者参数 |
+| `setparam` | setter 的参数 |
+| `delegate` | 委托属性存储委托实例的字段 |
+
+<Callout type="warn" title="不写目标时的默认规则">
+
+按 `param` → `property` → `field` 的顺序，**选第一个适用的**。
+
+这就是 Gson 注解失效的原因：
+
+```kt
+data class User(
+    @SerializedName("user_name") val userName: String    // ⚠️ 落到了 param 上
+)
+```
+
+主构造函数属性上，`param` 首先命中——注解跑到了构造函数参数上，
+而 Gson 是**通过反射读字段**的，自然找不到。
+
+正确写法是 `@field:SerializedName("user_name")`。
+
+Moshi 和 kotlinx.serialization 因为是 Kotlin 感知的，
+用 `@Json(name = "...")` / `@SerialName("...")` 不需要前缀。
+
+</Callout>
+
+## 3. 常见的 JVM 互操作注解
+
+```kt
+class Utils {
+    companion object {
+        @JvmStatic
+        fun helper() {}              // Java: Utils.helper()
+
+        @JvmField
+        val VERSION = "1.0"          // Java: Utils.VERSION（不生成 getter）
+    }
+}
+
+@JvmOverloads
+fun greet(name: String, greeting: String = "你好") {}   // 生成所有重载
+
+@JvmName("processStrings")
+fun process(list: List<String>) {}   // 避免签名冲突
+
+@Throws(IOException::class)
+fun read() {}                        // 生成 throws 声明
+```
+
+| 注解 | 解决的问题 |
+| --- | --- |
+| `@JvmStatic` | Java 侧不用写 `.Companion.` |
+| `@JvmField` | Java 侧直接访问字段 |
+| `@JvmOverloads` | 默认参数生成重载（自定义 View 必需） |
+| `@JvmName` | 泛型擦除后的签名冲突 |
+| `@Throws` | 让 Java 能 catch 受检异常 |
+
+## 4. Android 常见注解
+
+```kt
+// androidx.annotation：编译期检查
+@StringRes fun setTitle(@StringRes resId: Int) {}
+@ColorInt fun setColor(@ColorInt color: Int) {}
+@RequiresApi(Build.VERSION_CODES.O) fun useOreoApi() {}
+@MainThread fun updateUi() {}
+@WorkerThread suspend fun loadData() {}
+@VisibleForTesting internal fun forTest() {}
+
+// 防混淆
+@Keep
+data class ApiResponse(val code: Int)
+
+// Parcelize
+@Parcelize
+data class User(val id: Long, val name: String) : Parcelable
+```
+
+<Callout type="tip" title="@Keep 与 R8">
+
+R8 会裁剪和重命名未被引用的类。**通过反射使用的类**（JSON 模型、
+反射创建的对象）会被误删或改名，导致线上崩溃而 debug 包正常。
+
+`@Keep` 告诉 R8 保留这个类及其成员。
+
+Moshi/kotlinx.serialization 用 codegen 时不需要 `@Keep`（它们生成的是
+静态代码不是反射），Gson 则**必须**加。这是又一个迁移掉 Gson 的理由。
+
+</Callout>
+
+## 5. 注解处理：kapt vs KSP
+
+```kt
+// 老：kapt
+dependencies {
+    kapt("androidx.room:room-compiler:2.6.1")
+}
+
+// 新：KSP
+plugins { id("com.google.devtools.ksp") }
+dependencies {
+    ksp("androidx.room:room-compiler:2.6.1")
+}
+```
+
+见 [0 环境配置](/docs/00-start/getting-started)——结论是**新代码一律用 KSP**。
+
+## 6. 自己写一个可用的注解
+
+```kotlin
+import kotlin.reflect.full.findAnnotation
+import kotlin.reflect.full.memberProperties
+
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Masked(val keepLast: Int = 4)
+
+data class Account(
+    val name: String,
+    @Masked(keepLast = 4) val cardNumber: String,
+    @Masked(keepLast = 0) val password: String,
+)
+
+fun Account.toSafeString(): String =
+    Account::class.memberProperties.joinToString(", ") { prop ->
+        val value = prop.get(this).toString()
+        val mask = prop.findAnnotation<Masked>()
+        val shown = if (mask == null) value
+        else "*".repeat((value.length - mask.keepLast).coerceAtLeast(0)) +
+            value.takeLast(mask.keepLast)
+        "${prop.name}=$shown"
+    }
+
+fun main() {
+    println(Account("Summer", "6222021234567890", "secret123").toSafeString())
+}
+```
+
+<Callout type="warn">
+
+这个例子用了**反射**，在 Android 上有代价（`kotlin-reflect` 体积大、运行慢）。
+真实项目里同样的需求应该用 **KSP** 在编译期生成代码。见
+[9.2 反射](/docs/09-advanced/reflection)。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>@SerializedName("user_name") val userName: String</code> 写在主构造函数里，
+      注解默认加在哪？
+    </>
+  }
+  options={[
+    '字段 field',
+    '构造函数参数 param',
+    'getter',
+    'Kotlin 属性 property',
+  ]}
+  answer={1}
+>
+
+**构造函数参数 param**。不写使用处目标时，编译器按
+`param` → `property` → `field` 的顺序选**第一个适用的**——
+主构造函数属性上 `param` 首先命中。
+
+这正是 Gson 注解「不生效」的原因：Gson 通过反射读**字段**，
+而注解跑到了构造函数参数上。
+
+修法是显式指定：`@field:SerializedName("user_name")`。
+
+Moshi 和 kotlinx.serialization 是 Kotlin 感知的，
+它们的注解（`@Json` / `@SerialName`）不需要前缀。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么 JSON 数据模型类通常需要加 <code>@Keep</code>？
+    </>
+  }
+  options={[
+    '为了性能',
+    'R8 会裁剪/重命名未被直接引用的类，而反射使用的类会被误伤，导致 release 包崩溃',
+    '为了支持 Parcelable',
+    '为了让 Gson 更快',
+  ]}
+  answer={1}
+>
+
+R8 做代码裁剪和混淆时，只看**静态引用**。JSON 模型类的字段名是被反射读取的，
+R8 看不到这层依赖，于是把字段名混淆成 `a`、`b`——JSON 解析出来全是 null。
+
+典型症状：**debug 包正常，release 包数据全空**。
+
+`@Keep` 告诉 R8 保留该类及其成员的原始名称。
+
+更好的解法是**不依赖反射**：Moshi 的 codegen 和 kotlinx.serialization
+在编译期生成静态的序列化代码，R8 能正常追踪，不需要 `@Keep`。
+这是又一个迁移掉 Gson 的理由。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="Kotlin 注解的 @Retention 默认值是什么？和 Java 有区别吗？"
+  options={[
+    'SOURCE，和 Java 一样',
+    'RUNTIME，Java 默认是 CLASS',
+    'CLASS，和 Java 一样',
+    'BINARY，Java 默认是 RUNTIME',
+  ]}
+  answer={1}
+>
+
+Kotlin 默认 **RUNTIME**，Java 默认 **CLASS**（Kotlin 里叫 `BINARY`）。
+
+三个级别：
+
+- `SOURCE`：只在源码，编译后丢弃（如 `@Suppress`）
+- `BINARY`：保留在 class 文件，但运行时反射拿不到
+- `RUNTIME`：运行时可通过反射读取
+
+Kotlin 选 RUNTIME 作为默认，是因为大多数自定义注解确实要在运行时被读。
+
+不过对**只给编译期工具用**的注解（KSP/kapt 处理的），
+应该显式标 `SOURCE` 或 `BINARY`——能减少一点 APK 体积和运行时开销。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些注解是为了改善 Java 互操作？"
+  options={['@JvmStatic', '@JvmOverloads', '@Parcelize', '@Throws']}
+  answer={[0, 1, 3]}
+>
+
+A、B、D 都是互操作注解：
+
+- **`@JvmStatic`**：让 Java 写 `Utils.helper()` 而不是 `Utils.Companion.helper()`
+- **`@JvmOverloads`**：给默认参数生成所有重载版本。
+  自定义 View 必须加，否则 XML inflate 时反射找不到两参数构造函数
+- **`@Throws`**：生成 `throws` 声明，否则 Java 侧无法 catch 受检异常
+
+**`@Parcelize` 不是**——它属于 `kotlin-parcelize` 插件，
+作用是自动生成 Parcelable 的 `writeToParcel` 和 `CREATOR` 实现，
+和 Java 互操作没关系。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[annotations](https://book.kotlincn.net/text/annotations.html)
-- 官方英文：[annotations](https://kotlinlang.org/docs/annotations.html)
+- 官方英文：[annotations](https://kotlinlang.org/docs/annotations.html) ／ [java-to-kotlin-interop](https://kotlinlang.org/docs/java-to-kotlin-interop.html)

@@ -1,19 +1,415 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 9.4 类型安全构建器（DSL）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Gradle KTS 的 `android { ... }`、Compose 的 `Column { ... }`——
+这些看起来像「新语法」的东西，其实全是**带接收者的 lambda** 这一个特性。
+理解了它，你就能读懂它们，也能写自己的 DSL。
+
+## 1. 一切的基础：`T.() -> Unit`
+
+```kotlin
+class Greeting {
+    private val lines = mutableListOf<String>()
+    fun line(text: String) { lines += text }
+    override fun toString() = lines.joinToString("\n")
+}
+
+// 参数类型是 Greeting.() -> Unit，不是 (Greeting) -> Unit
+fun greeting(block: Greeting.() -> Unit): Greeting = Greeting().apply(block)
+
+fun main() {
+    val g = greeting {
+        line("你好")          // 不用写 it.line(...)
+        line("世界")
+    }
+    println(g)
+}
+```
+
+回顾 [5.2 Lambda](/docs/05-functional/lambdas)：`T.() -> R` 让 `T` 的实例
+成为 lambda 内的**隐式 `this`**，所以能直接调用它的成员。
+
+<Callout type="success">
+
+`apply` 的定义就是这个：
+
+```kt
+inline fun <T> T.apply(block: T.() -> Unit): T { block(); return this }
+```
+
+所以 `greeting { }` 的实现只需要 `Greeting().apply(block)`。
+
 </Callout>
 
-## 学习提纲
+## 2. 完整的嵌套 DSL
 
-- 带接收者的函数字面量回顾
-- 构建器模式的 Kotlin 写法
-- @DslMarker 避免作用域串味
-- 实例：Gradle KTS、Jetpack Compose 的写法来源
+```kotlin
+class Table {
+    private val rows = mutableListOf<Row>()
 
-## 与 Java / Android 的关键差异
+    fun row(block: Row.() -> Unit) {
+        rows += Row().apply(block)
+    }
 
-Gradle KTS 和 Compose 都建立在这套机制上，理解它才能读懂它们。
+    override fun toString() =
+        "<table>\n${rows.joinToString("\n")}\n</table>"
+}
+
+class Row {
+    private val cells = mutableListOf<String>()
+
+    fun cell(text: String) { cells += "<td>$text</td>" }
+
+    override fun toString() = "  <tr>${cells.joinToString("")}</tr>"
+}
+
+fun table(block: Table.() -> Unit): Table = Table().apply(block)
+
+fun main() {
+    val t = table {
+        row {
+            cell("姓名")
+            cell("年龄")
+        }
+        row {
+            cell("Summer")
+            cell("28")
+        }
+    }
+    println(t)
+}
+```
+
+嵌套的原理：`row` 是 `Table` 的方法，它自己又接受一个 `Row.() -> Unit`。
+层层嵌套就构成了树形结构。
+
+## 3. @DslMarker：防止作用域串味
+
+上面的 DSL 有个问题：
+
+```kt
+table {
+    row {
+        cell("A")
+        row { }        // ⚠️ 在 row 里能调用外层 Table 的 row()，产生非法结构
+    }
+}
+```
+
+因为内层 lambda 里同时能访问两个隐式接收者（`Row` 和外层的 `Table`）。
+
+```kotlin
+@DslMarker
+annotation class HtmlDsl
+
+@HtmlDsl
+class Table {
+    private val rows = mutableListOf<Row>()
+    fun row(block: Row.() -> Unit) { rows += Row().apply(block) }
+    override fun toString() = "<table>${rows.joinToString("")}</table>"
+}
+
+@HtmlDsl
+class Row {
+    private val cells = mutableListOf<String>()
+    fun cell(text: String) { cells += "<td>$text</td>" }
+    override fun toString() = "<tr>${cells.joinToString("")}</tr>"
+}
+
+fun table(block: Table.() -> Unit) = Table().apply(block)
+
+fun main() {
+    println(table {
+        row {
+            cell("A")
+            // row { }      // ❌ 现在编译报错了
+        }
+    })
+}
+```
+
+<Callout type="success" title="@DslMarker 的规则">
+
+**标记了同一个 DslMarker 注解的多个接收者，内层会屏蔽外层的隐式访问。**
+
+想访问外层时必须显式限定：`this@table.row { }`——
+这样至少是明确的，不会是手误。
+
+Compose 的 `@LayoutScopeMarker`、Gradle KTS 的 DSL 都用了这个机制。
+
+</Callout>
+
+## 4. 加上类型安全
+
+DSL 的「类型安全」体现在：**结构错误在编译期就被拒绝**。
+
+```kotlin
+@DslMarker
+annotation class FormDsl
+
+@FormDsl
+class Form {
+    private val fields = mutableListOf<String>()
+
+    fun text(name: String, block: TextField.() -> Unit = {}) {
+        fields += TextField(name).apply(block).render()
+    }
+
+    fun submit(label: String) { fields += "[提交: $label]" }
+
+    override fun toString() = fields.joinToString("\n")
+}
+
+@FormDsl
+class TextField(private val name: String) {
+    var placeholder: String = ""
+    var required: Boolean = false
+
+    fun render() = "$name${if (required) "*" else ""}: 「$placeholder」"
+}
+
+fun form(block: Form.() -> Unit) = Form().apply(block)
+
+fun main() {
+    println(form {
+        text("用户名") {
+            placeholder = "请输入用户名"
+            required = true
+        }
+        text("邮箱") {
+            placeholder = "可选"
+        }
+        submit("注册")
+        // cell("x")     // ❌ Form 里没有 cell，编译报错
+    })
+}
+```
+
+## 5. 你每天都在用的 DSL
+
+```kt
+// Gradle KTS
+android {
+    compileSdk = 34
+    defaultConfig {
+        minSdk = 24
+        targetSdk = 34
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+        }
+    }
+}
+
+// Jetpack Compose
+Column(modifier = Modifier.fillMaxSize()) {
+    Text("标题")
+    Row {
+        Button(onClick = { }) { Text("确定") }
+    }
+}
+
+// kotlinx.html / Ktor / Exposed 等等
+```
+
+全都是 `T.() -> Unit` + `@DslMarker`。
+
+## 6. 什么时候该写 DSL
+
+<Callout type="warn" title="DSL 不是免费的">
+
+**收益**：调用点可读性极高，结构一目了然，编译期能校验结构。
+
+**代价**：
+
+- 多一层需要理解的抽象——新人要先搞懂「这个 `cell` 是哪来的」
+- IDE 跳转和查找引用变得间接
+- 调试时调用栈更深
+- 需要额外的 Builder 类
+
+**适合写 DSL 的场景**：
+
+- 配置对象层级很深（构建 UI 树、构建请求、构建测试数据）
+- 同一个结构会被写很多遍
+- 结构本身是**树形**的
+
+**不适合**：
+
+- 只有两三个字段的配置——`data class` + 具名实参就够了
+- 一次性的、只用一遍的代码
+- 团队里没人熟悉这个模式
+
+</Callout>
+
+## 7. 一个实用的例子：测试数据构建
+
+```kotlin
+data class User(
+    val id: Long = 0,
+    val name: String = "",
+    val email: String = "",
+    val isVip: Boolean = false,
+)
+
+class UserBuilder {
+    var id: Long = 1
+    var name: String = "测试用户"
+    var email: String = "test@example.com"
+    var isVip: Boolean = false
+
+    fun build() = User(id, name, email, isVip)
+}
+
+fun user(block: UserBuilder.() -> Unit = {}) = UserBuilder().apply(block).build()
+
+fun main() {
+    // 只写关心的字段，其余用合理的默认值
+    println(user())
+    println(user { name = "Summer"; isVip = true })
+    println(user { id = 42 })
+}
+```
+
+<Callout type="tip">
+
+这个模式在**单元测试**里价值很大：测试只关心一两个字段，
+其他字段有合理默认值，测试代码就能聚焦在被测的那一点上。
+
+不过要注意：如果 `data class` 本身已经给所有参数配了默认值，
+`User(name = "Summer", isVip = true)` 也能达到同样效果——
+那就不需要 Builder 了。
+
+**先试试默认参数 + 具名实参，不够用再上 DSL。**
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question="Kotlin DSL（如 Gradle KTS、Compose）的核心语言特性是什么？"
+  options={[
+    '注解处理器',
+    '带接收者的函数字面量 T.() -> Unit，让接收者成为 lambda 内的隐式 this',
+    '反射',
+    '操作符重载',
+  ]}
+  answer={1}
+>
+
+**带接收者的函数字面量** `T.() -> Unit`。
+
+它让 `T` 的实例成为 lambda 内的**隐式 `this`**，所以能直接写
+`compileSdk = 34` 而不是 `it.compileSdk = 34`。
+
+`apply` 的定义就是这个：
+
+```
+inline fun <T> T.apply(block: T.() -> Unit): T { block(); return this }
+```
+
+所以一个最小的 DSL 只需要：
+
+```
+fun table(block: Table.() -> Unit) = Table().apply(block)
+```
+
+嵌套结构就是让 `Table` 的方法再接受另一个 `Row.() -> Unit`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>@DslMarker</code> 解决什么问题？
+    </>
+  }
+  options={[
+    '生成 DSL 代码',
+    '内层 lambda 会屏蔽外层接收者的隐式访问，防止写出 row { row { } } 这种非法结构',
+    '提升性能',
+    '支持并发',
+  ]}
+  answer={1}
+>
+
+嵌套 lambda 里同时存在**多个隐式接收者**，默认情况下内层能直接调用外层的方法：
+
+```
+table {
+    row {
+        row { }      // 😱 调到了外层 Table 的 row()，产生非法的嵌套结构
+    }
+}
+```
+
+`@DslMarker` 让**标记了同一注解的多个接收者互斥**：内层作用域里，
+外层接收者的成员不再隐式可用，必须显式写 `this@table.row { }`。
+
+Compose 的 `@LayoutScopeMarker`、Gradle KTS 都用了这个机制。
+写任何嵌套 DSL 时都应该加上。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>(Config) -&gt; Unit</code> 和 <code>Config.() -&gt; Unit</code> 作为参数类型，调用时写法有何不同？
+    </>
+  }
+  options={[
+    '没有区别',
+    '前者 lambda 内要写 it.xxx；后者 Config 成为隐式 this，可以直接写 xxx',
+    '后者性能更好',
+    '前者不能用 lambda',
+  ]}
+  answer={1}
+>
+
+```
+// (Config) -> Unit
+configure { it.host = "a"; it.port = 80 }
+
+// Config.() -> Unit
+configure { host = "a"; port = 80 }
+```
+
+后者正是 DSL 读起来「像配置文件而不像代码」的原因。
+
+同样的区别也体现在作用域函数上：`apply`/`run`/`with` 用
+`T.() -> R`（`this`），`let`/`also` 用 `(T) -> R`（`it`）。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="什么时候不该写 DSL？"
+  options={[
+    'DSL 总是更好',
+    '配置只有两三个字段时——data class + 默认参数 + 具名实参就够了，DSL 只是多一层抽象',
+    '需要嵌套结构时',
+    '团队人数超过 5 人时',
+  ]}
+  answer={1}
+>
+
+DSL 的代价是**多一层需要理解的抽象**：新人要先搞懂「这个方法是哪来的」，
+IDE 跳转变间接，调试栈更深，还要额外写 Builder 类。
+
+配置只有两三个字段时，这些代价换不来什么：
+
+```
+// 够用了，不需要 DSL
+data class Config(val host: String = "localhost", val port: Int = 80)
+Config(host = "api.example.com", port = 443)
+```
+
+**适合 DSL 的信号**：结构是树形的、层级深、同样的结构要写很多遍
+（UI 树、构建脚本、测试数据）。
+
+原则：**先试默认参数 + 具名实参，不够用再上 DSL。**
+
+</Quiz>
 
 ## 官方参考
 

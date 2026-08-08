@@ -1,21 +1,270 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 Java → Kotlin 迁移对照」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这一页是速查表，迁移时随手翻。按「字符串 / 集合 / 可空性 / 互操作注解」四块组织。
+
+## 1. 字符串
+
+| 需求 | Java | Kotlin |
+| --- | --- | --- |
+| 拼接 | `String.format("%s: %d", a, b)` | `"$a: $b"` |
+| 判空白 | `StringUtils.isBlank(s)` | `s.isNullOrBlank()` |
+| 判空 | `s == null \|\| s.isEmpty()` | `s.isNullOrEmpty()` |
+| null 转空串 | `s == null ? "" : s` | `s.orEmpty()` |
+| 忽略大小写比较 | `s.equalsIgnoreCase(t)` | `s.equals(t, ignoreCase = true)` |
+| 转大写 | `s.toUpperCase()` | `s.uppercase()` |
+| 截取分隔符后 | `s.substring(s.indexOf("@") + 1)` | `s.substringAfter("@")` |
+| 拼接集合 | `String.join(", ", list)` | `list.joinToString(", ")` |
+| 循环拼接 | `StringBuilder` | `buildString { }` |
+| 多行字符串 | `"a\n" + "b\n"` | `"""…""".trimIndent()` |
+| 正则 | `"\\d{4}"` | `"""\d{4}"""` |
+| 重复 | `s.repeat(3)` | `s.repeat(3)` |
+| 判断包含 | `s.contains(t)` | `t in s` |
+
+```kotlin
+fun main() {
+    val email = "summer@example.com"
+    println(email.substringAfter("@"))
+    println(email.substringBefore("@"))
+
+    val n: String? = null
+    println(n.orEmpty())
+    println(n.isNullOrBlank())
+
+    println(listOf("a", "b").joinToString(" | ", prefix = "[", postfix = "]"))
+}
+```
+
+## 2. 集合
+
+| 需求 | Java | Kotlin |
+| --- | --- | --- |
+| 创建只读 | `Collections.unmodifiableList(...)` | `listOf(...)` |
+| 创建可变 | `new ArrayList<>()` | `mutableListOf()` |
+| 过滤 | `stream().filter().collect()` | `filter { }` |
+| 映射 | `stream().map().collect()` | `map { }` |
+| 求和 | `stream().mapToInt().sum()` | `sumOf { }` |
+| 分组 | `Collectors.groupingBy(...)` | `groupBy { }` |
+| 转 Map | `Collectors.toMap(...)` | `associateBy { }` |
+| 排序 | `Comparator.comparing().thenComparing()` | `compareBy({ }, { })` |
+| 找第一个 | `stream().filter().findFirst()` | `firstOrNull { }` |
+| 是否存在 | `stream().anyMatch()` | `any { }` |
+| 打平 | `flatMap(List::stream)` | `flatMap { }` |
+| 去重 | `stream().distinct()` | `distinct()` |
+| 遍历带下标 | `for (int i = 0; ...)` | `forEachIndexed { i, v -> }` |
+| Map 遍历 | `for (Entry<K,V> e : map.entrySet())` | `for ((k, v) in map)` |
+| 安全取值 | `list.size() > i ? list.get(i) : null` | `list.getOrNull(i)` |
+| 惰性求值 | `stream()` | `asSequence()` |
+
+```kotlin
+data class Order(val user: String, val amount: Int, val paid: Boolean)
+
+fun main() {
+    val orders = listOf(
+        Order("Summer", 100, true),
+        Order("Xia", 250, false),
+        Order("Summer", 80, true),
+    )
+
+    println(orders.filter { it.paid }.sumOf { it.amount })
+    println(orders.groupBy { it.user }.mapValues { (_, v) -> v.size })
+    println(orders.associateBy { it.user }.keys)
+    println(orders.sortedWith(compareByDescending<Order> { it.amount }.thenBy { it.user }))
+}
+```
+
+## 3. 可空性
+
+| 需求 | Java | Kotlin |
+| --- | --- | --- |
+| 可空类型 | `@Nullable String` | `String?` |
+| 非空类型 | `@NonNull String` | `String` |
+| 判空取默认 | `x != null ? x : d` | `x ?: d` |
+| 判空执行 | `if (x != null) { ... }` | `x?.let { ... }` |
+| 链式取值 | 层层判空 | `a?.b?.c` |
+| 断言非空 | `Objects.requireNonNull(x)` | `requireNotNull(x) { "原因" }` |
+| 相等比较 | `Objects.equals(a, b)` | `a == b`（自带 null 检查） |
+| 可选值 | `Optional<T>` | `T?` |
+
+<Callout type="warn" title="从 Java 来的值是「平台类型」">
+
+```kt
+val name = javaApi.getName()      // 推断为 String!，编译器不检查
+println(name.length)              // 编译通过，运行时可能 NPE
+```
+
+三条防御：
+
+1. 接收时**显式声明可空**：`val name: String? = javaApi.getName()`
+2. 给 Java 侧**补 `@Nullable`/`@NonNull` 注解**（AndroidX 已经做了）
+3. 用 `requireNotNull(...)` 立刻断言，让失败发生在源头
+
+详见 [6.1 空安全深入](/docs/06-null-safety/null-safety)。
+
 </Callout>
 
-## 学习提纲
+## 4. 语言结构
 
-- 字符串操作对照
-- 集合操作对照
-- 可空性与平台类型
-- 互操作注解速查（@JvmStatic/@JvmField/@JvmOverloads/@Throws）
+| Java | Kotlin |
+| --- | --- |
+| `final String s` | `val s` |
+| `String s` | `var s` |
+| `new Foo()` | `Foo()` |
+| `a instanceof Foo` + 强转 | `a is Foo`（自动 smart cast） |
+| `(Foo) a` | `a as Foo` / `a as? Foo` |
+| `a == b`（引用） | `a === b` |
+| `a.equals(b)` | `a == b` |
+| `switch` | `when`（可匹配类型、区间，有返回值） |
+| `a ? b : c` | `if (a) b else c` |
+| `static` 成员 | `companion object` / 顶层声明 |
+| 静态工具类 | 顶层函数 / **扩展函数** |
+| POJO + Lombok | `data class` |
+| 枚举 + 数据 | `sealed class/interface` |
+| 单例 | `object` |
+| 匿名内部类 | `object : Type { }` 或 lambda |
+| `try-with-resources` | `use { }` |
+| 受检异常 | 无（互操作时用 `@Throws`） |
+| 内部类（持有外部引用） | `inner class` |
+| 静态内部类 | `class`（**默认就是**） |
+| 双检锁懒加载 | `by lazy { }` |
+| 方法重载（参数递增） | 默认参数 + `@JvmOverloads` |
 
-## 与 Java / Android 的关键差异
+## 5. 互操作注解速查
 
-迁移时最常查的一页。
+| 注解 | 用在哪 | 解决什么 |
+| --- | --- | --- |
+| `@JvmStatic` | companion 里的函数/属性 | Java 侧不用写 `.Companion.` |
+| `@JvmField` | 属性 | Java 侧直接访问字段，不走 getter |
+| `@JvmOverloads` | 有默认参数的函数/构造函数 | 生成所有重载版本（**自定义 View 必需**） |
+| `@JvmName("x")` | 函数 / 文件 | 改 JVM 层面的名字，解决签名冲突 |
+| `@Throws(E::class)` | 函数 | 生成 `throws` 声明，Java 才能 catch |
+| `@file:JvmName("X")` | 文件顶部 | 改顶层声明所在类的名字（去掉 `Kt` 后缀） |
+| `@field:` / `@get:` / `@param:` | 属性上的注解 | 指定注解作用于哪个 JVM 元素 |
+
+```kt
+@file:JvmName("StringUtils")      // ← 必须在 package 之前
+
+package com.example.util
+
+@JvmOverloads
+fun format(value: Int, prefix: String = "¥"): String = "$prefix$value"
+
+@Throws(IOException::class)
+fun readConfig(path: String): String = TODO()
+```
+
+## 6. 迁移策略
+
+<Callout type="success" title="推荐的顺序">
+
+1. **从叶子节点开始**——先转没有被太多地方依赖的工具类、数据模型
+2. **一次一个文件**，`Ctrl+Alt+Shift+K` 自动转换后**人工过一遍**
+3. **重点检查两件事**：满屏的 `!!`（应改成 `?.`/`?:`/可空类型）、
+   该是 `val` 却被保留成 `var` 的变量
+4. **公开 API 边界最后转**——那里 `@JvmStatic`/`@JvmOverloads` 最容易漏
+5. **新代码一律用 Kotlin**，老代码在改动时顺手迁移
+
+</Callout>
+
+<Callout type="warn" title="自动转换后必查清单">
+
+- [ ] 所有 `!!` 是否都有必要
+- [ ] `var` 能否改成 `val`
+- [ ] 平台类型（来自 Java 的返回值）是否显式声明了可空性
+- [ ] 会被 Java 调用的函数是否加了 `@JvmStatic` / `@JvmOverloads` / `@Throws`
+- [ ] Gson 等反射库的注解是否加了 `@field:` 前缀
+- [ ] 自定义 View 的构造函数是否加了 `@JvmOverloads`
+- [ ] `data class` 里是否有数组字段（应改成 `List`）
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  type="fill"
+  question="把 Java 的 StringUtils.isBlank(s) 翻译成 Kotlin（s 可能为 null）。"
+  answer={['s.isNullOrBlank()', 'isNullOrBlank()']}
+>
+
+`s.isNullOrBlank()`。
+
+它是定义在**可空接收者** `CharSequence?` 上的扩展函数，
+所以 `s` 为 null 时也能直接调用，不需要先判空。
+
+同族的还有：
+
+- `s.isNullOrEmpty()` —— 判 null 或长度为 0
+- `s.orEmpty()` —— null 转成 `""`
+
+「空白」和「空」的区别：`isBlank` 认为 `"   "` 是空白，`isEmpty` 不认为。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      Java 的 <code>Objects.equals(a, b)</code> 在 Kotlin 里对应什么？
+    </>
+  }
+  options={['a === b', 'a == b', 'a.equals(b)', 'a.contentEquals(b)']}
+  answer={1}
+>
+
+`a == b`。Kotlin 的 `==` 编译成 `a?.equals(b) ?: (b === null)`——
+**自带 null 检查**，所以完全等价于 `Objects.equals`。
+
+牢记这个反转：
+
+- Kotlin 的 `==` = Java 的 `equals`
+- Kotlin 的 `===` = Java 的 `==`（引用比较）
+
+`contentEquals` 是数组专用的——数组的 `==` 是引用比较，
+比内容要用 `contentEquals` / `contentDeepEquals`。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="Java 自动转 Kotlin 后，最需要人工修正的两类问题是什么？"
+  options={[
+    '缩进和命名',
+    '大量本可避免的 !!（因为 Java 侧没有可空性信息），以及本该是 val 却保留为 var',
+    'import 语句',
+    '注释格式',
+  ]}
+  answer={1}
+>
+
+- **`!!` 泛滥**：Java 代码没有可空性注解，转换器只能假设一切非空，
+  于是塞满 `!!`。这些应该按实际语义改成 `?.`、`?:`，或者把类型声明为可空。
+- **该 `val` 的都是 `var`**：转换器保守地保留了可变性，需要你判断哪些其实是只读的。
+
+换句话说：**自动转换给你的是「语法是 Kotlin 的 Java 代码」**，
+把它变成真正的 Kotlin 是人的工作。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="Kotlin 代码要被 Java 调用时，哪些注解可能需要加？"
+  options={['@JvmStatic', '@JvmOverloads', '@Throws', '@Parcelize']}
+  answer={[0, 1, 2]}
+>
+
+A、B、C 都是互操作注解：
+
+- **`@JvmStatic`**：companion object 的成员，让 Java 写 `Utils.helper()`
+  而不是 `Utils.Companion.helper()`
+- **`@JvmOverloads`**：有默认参数的函数/构造函数，生成所有重载版本。
+  **自定义 View 必须加**，否则 XML inflate 时反射找不到两参数构造函数
+- **`@Throws`**：否则 Java 侧无法 catch 受检异常（报 `never thrown`）
+
+**`@Parcelize` 不是互操作注解**——它属于 `kotlin-parcelize` 插件，
+用来自动生成 Parcelable 实现，和 Java 调用没关系。
+
+</Quiz>
 
 ## 官方参考
 
-- 官方中文：[java-to-kotlin-interop](https://book.kotlincn.net/text/java-to-kotlin-interop.html)
-- 官方英文：[java-to-kotlin-interop](https://kotlinlang.org/docs/java-to-kotlin-interop.html)
+- 官方中文：[java-interop](https://book.kotlincn.net/text/java-interop.html) ／ [java-to-kotlin-interop](https://book.kotlincn.net/text/java-to-kotlin-interop.html)
+- 官方英文：[java-to-kotlin-interop](https://kotlinlang.org/docs/java-to-kotlin-interop.html) ／ [java-to-kotlin-idioms-strings](https://kotlinlang.org/docs/java-to-kotlin-idioms-strings.html)

@@ -1,19 +1,116 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 扩展参考（仅链回官方）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+这个站为 **Android 原生开发**做了裁剪，所以砍掉了不少官方文档里的内容。
+这一页说明砍了什么、为什么，以及想了解时去哪看。
+
+## 1. 本站的裁剪边界
+
+| 方向 | 是否覆盖 | 原因 |
+| --- | --- | --- |
+| Kotlin/JVM 语言核心 | ✅ 全覆盖 | Android 的基础 |
+| 协程与 Flow | ✅ 重点 | Android 异步的主力 |
+| 集合与标准库 | ✅ 全覆盖 | 每天都用 |
+| Java 互操作 | ✅ 覆盖 | Android 项目基本都是混合的 |
+| **Kotlin Multiplatform** | ❌ 只留入口 | 独立的技术栈，值得单独系统学 |
+| **Kotlin/Native** | ❌ | 与 Android 原生开发无关 |
+| **Kotlin/JS、Wasm** | ❌ | 同上 |
+| **Spring / Ktor 服务端** | ❌ | 后端方向 |
+| **数据分析（Kotlin DataFrame）** | ❌ | 数据方向 |
+| **竞赛编程** | ❌ | 与工程实践关系不大 |
+
+<Callout type="tip">
+
+裁掉它们不是因为不重要，而是因为**它们和「用 Kotlin 写 Android」这个目标之间
+没有依赖关系**。把注意力集中在会天天用到的部分，学习效率高得多。
+
+需要的时候再单独学，语言基础是通用的。
+
 </Callout>
 
-## 学习提纲
+## 2. 官方入口
 
-- 本站的裁剪边界
-- 官方文档入口
-- 进一步学习的方向
+**Kotlin 语言**
 
-## 与 Java / Android 的关键差异
+- [官方中文文档](https://book.kotlincn.net/) —— 本站各章的「官方参考」都链到这里
+- [官方英文文档](https://kotlinlang.org/docs/home.html) —— 更新更快，术语更准
+- [Kotlin Playground](https://play.kotlinlang.org/) —— 本站代码块用的就是它
+- [Kotlin 语言规范](https://kotlinlang.org/spec/) —— 抠细节时用
+- [Kotlin 官方博客](https://blog.jetbrains.com/kotlin/) —— 新版本特性
 
-这些方向与 Android 原生学习目标关系不大，只留入口。
+**Android**
 
-## 官方参考
+- [Android 开发者指南 · Kotlin](https://developer.android.com/kotlin) —— 官方最佳实践
+- [Android 架构指南](https://developer.android.com/topic/architecture) —— 分层、单一数据源
+- [协程在 Android 上的最佳实践](https://developer.android.com/kotlin/coroutines/coroutines-best-practices)
+- [Now in Android](https://github.com/android/nowinandroid) —— Google 官方示例项目，
+  是当前 Android 工程实践的参考答案
 
-- 本页无对应的官方章节。
+## 3. 本站没覆盖但 Android 上会用到的
+
+这些超出了「Kotlin 语言」的范围，但学完本站后自然会遇到：
+
+| 主题 | 建议入口 |
+| --- | --- |
+| **Jetpack Compose** | [官方教程](https://developer.android.com/jetpack/compose)。前置知识是本站的 [9.4 DSL](/docs/09-advanced/type-safe-builders)、[5.2 Lambda](/docs/05-functional/lambdas)、[8.6 Flow](/docs/08-coroutines/flow) |
+| **Hilt / 依赖注入** | [官方文档](https://developer.android.com/training/dependency-injection/hilt-android)。前置是 [4.12 对象声明](/docs/04-classes/object-declarations) |
+| **Room** | [官方文档](https://developer.android.com/training/data-storage/room)。返回 `Flow` 是标准用法 |
+| **WorkManager** | 需要「比页面活得久」的后台任务时用它，而不是 `GlobalScope` |
+| **kotlinx.serialization** | [官方文档](https://kotlinlang.org/docs/serialization.html)。比 Gson 更适合 Kotlin |
+| **单元测试与协程测试** | `kotlinx-coroutines-test` 的 `runTest`、`TestDispatcher` |
+
+## 4. 如果之后想学 KMP
+
+Kotlin Multiplatform 是唯一一个「学完本站后可能真的会去碰」的方向——
+毕竟你有 Flutter 背景，跨平台是熟悉的领域。
+
+<Callout type="tip" title="KMP 与 Flutter 的定位差异">
+
+- **Flutter**：自绘 UI，一套 UI 跑所有平台，业务和 UI 都共享
+- **KMP**：**只共享业务逻辑**（网络、数据库、领域层），UI 各平台原生实现
+  （Android 用 Compose，iOS 用 SwiftUI）
+
+所以 KMP 的卖点不是「省一半工作量」，而是**「保留原生 UI 体验的同时共享核心逻辑」**。
+
+对有 Flutter 经验的人来说，这个取舍点值得单独想清楚再投入。
+
+</Callout>
+
+入口：[Kotlin Multiplatform 官方文档](https://kotlinlang.org/docs/multiplatform.html)、
+[Compose Multiplatform](https://www.jetbrains.com/compose-multiplatform/)。
+
+前置知识是本站的全部内容——KMP 的语言基础和 Kotlin/JVM 完全一致，
+差异在于 `expect`/`actual` 机制和构建配置。
+
+## 5. 这个站接下来怎么用
+
+<Callout type="success">
+
+56 章现在都是精讲状态。建议的使用方式：
+
+1. **系统过一遍**：按顺序读，代码块都跑一下、改一下
+2. **当速查手册**：侧边栏有筛选框，忘了某个 API 直接搜
+3. **发现问题就改**：内容有错或者想补充，直接编辑 `content/` 下对应的 MDX
+   文件再 push，Vercel 会自动重新部署
+
+想调整章节结构（增删章节、改标题），编辑 `scripts/gen-content.mjs`
+后运行 `npm run gen`——它不会覆盖已有的 MDX 内容。
+
+</Callout>
+
+## 6. 学完之后
+
+<Callout type="tip" title="给一个有 4 年经验的移动端工程师的建议">
+
+语言层面过完之后，真正拉开差距的不是「知道更多语法」，而是：
+
+1. **读 kotlinx.coroutines 的源码**——`launch`、`Job` 的状态机、
+   `Flow` 的操作符融合。你有 Flutter 引擎升级的经验，读这类基础库源码应该是舒适区。
+2. **读 Now in Android**——看 Google 自己怎么组织多 module、
+   怎么做 UI State 建模、怎么写测试。
+3. **在自己项目里做一次真实的迁移**——挑一个中等复杂度的模块，
+   从 Java 迁到 Kotlin，把本站附录的检查清单跑一遍。这比读十遍文档有用。
+
+</Callout>
+
+## 官方文档总入口
+
+- 中文：[https://book.kotlincn.net/](https://book.kotlincn.net/)
+- 英文：[https://kotlinlang.org/docs/](https://kotlinlang.org/docs/)

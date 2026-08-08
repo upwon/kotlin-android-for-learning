@@ -3,9 +3,10 @@
 一条为 **Android 原生开发**裁剪的 Kotlin 学习路线。内容基于 Kotlin 官方文档重组，
 砍掉 Native / JS / Wasm / Spring / 数据分析等与目标无关的部分，全程拿 Java 与 Android 做对照。
 
-- 全站 **56 章**，导航结构一次建好，全部可访问
-- 代码块由 [Kotlin Playground](https://github.com/JetBrains/kotlin-playground) 驱动，**可以直接改代码并运行**
-- 每篇精讲末尾配交互练习题（单选 / 多选 / 填空 + 解析）
+- 全站 **56 章**，内容全部写完
+- **302 段可运行代码**——由 [Kotlin Playground](https://github.com/JetBrains/kotlin-playground) 驱动，可以直接改了再跑
+- **216 道交互练习题**（单选 / 多选 / 填空 + 详细解析）
+- 全程拿 Java / Android 做对照，只讲差异
 
 ## 本地开发
 
@@ -82,7 +83,7 @@ npm run gen
 ```
 
 会重新生成 `lib/toc.ts` 和 `content/registry.ts`，并为缺失的章节补上骨架 MDX。
-**已存在的 MDX 不会被覆盖**，所以「点亮」某一章只需要直接编辑对应文件。
+**已存在的 MDX 不会被覆盖**，所以修改某一章只需要直接编辑对应文件。
 
 > ⚠️ 大纲文本里出现 `Array<T>`、`List<out E>` 这类尖括号时要用反引号包起来，
 > 否则 MDX 会把它当成 JSX 标签。
