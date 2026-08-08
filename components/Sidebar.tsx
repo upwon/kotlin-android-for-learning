@@ -107,7 +107,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                           aria-current={active ? 'page' : undefined}
                           className={`-ml-px flex items-center gap-1.5 border-l py-1.5 pl-3 pr-2 text-[0.8125rem] leading-snug transition-colors ${
                             active
-                              ? 'border-indigo-500 font-medium text-indigo-700 dark:border-indigo-400 dark:text-indigo-300'
+                              ? 'border-accent-500 font-medium text-accent-700 dark:border-accent-400 dark:text-accent-300'
                               : 'border-transparent text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-100'
                           }`}
                         >

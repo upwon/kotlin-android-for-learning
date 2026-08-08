@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "gen": "node scripts/gen-content.mjs",
+    "palette": "node scripts/gen-palette.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

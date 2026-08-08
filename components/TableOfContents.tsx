@@ -62,7 +62,7 @@ export function TableOfContents({ containerId }: { containerId: string }) {
                   heading.level === 3 ? 'pl-6' : 'pl-3'
                 } ${
                   active
-                    ? 'border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-300'
+                    ? 'border-accent-500 text-accent-600 dark:border-accent-400 dark:text-accent-300'
                     : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-100'
                 }`}
               >

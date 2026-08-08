@@ -20,7 +20,7 @@ export default function Home() {
         <div className="mt-6 flex flex-wrap gap-3">
           <Link
             href="/docs/01-basics/val-var-null-safety"
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+            className="rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-700"
           >
             从 1.2 精讲课开始 →
           </Link>
@@ -53,7 +53,7 @@ export default function Home() {
         <div className="space-y-6">
           {toc.map((part) => (
             <div key={part.id}>
-              <h3 className="mb-2 text-sm font-semibold tracking-wide text-indigo-600 dark:text-indigo-400">
+              <h3 className="mb-2 text-sm font-semibold tracking-wide text-accent-600 dark:text-accent-400">
                 {part.title}
               </h3>
               <ul className="grid gap-2 sm:grid-cols-2">
@@ -61,7 +61,7 @@ export default function Home() {
                   <li key={lesson.slug}>
                     <Link
                       href={`/docs/${lesson.slug}`}
-                      className="block h-full rounded-lg border border-slate-200 px-3.5 py-2.5 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-800 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/20"
+                      className="block h-full rounded-lg border border-slate-200 px-3.5 py-2.5 transition-colors hover:border-accent-300 hover:bg-accent-50/40 dark:border-slate-800 dark:hover:border-accent-700 dark:hover:bg-accent-950/20"
                     >
                       <div className="flex items-center gap-1.5">
                         <span className="text-sm font-medium text-slate-800 dark:text-slate-100">

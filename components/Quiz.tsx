@@ -78,7 +78,7 @@ export function Quiz({ question, type = 'single', options = [], answer, index, c
       className="not-prose my-5 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900/40"
     >
       <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 shrink-0 rounded-md bg-indigo-50 px-1.5 py-0.5 text-xs font-semibold tabular-nums text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+        <span className="mt-0.5 shrink-0 rounded-md bg-accent-50 px-1.5 py-0.5 text-xs font-semibold tabular-nums text-accent-700 dark:bg-accent-950/60 dark:text-accent-300">
           {index != null ? `Q${index}` : 'Q'}
         </span>
         <div className="flex-1 text-[0.95rem] font-medium leading-relaxed text-slate-800 dark:text-slate-100">
@@ -100,7 +100,7 @@ export function Quiz({ question, type = 'single', options = [], answer, index, c
             rows={2}
             spellCheck={false}
             placeholder="在这里写你的答案…"
-            className="w-full resize-y rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-[0.85rem] text-slate-800 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-70 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-indigo-900/50"
+            className="w-full resize-y rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-[0.85rem] text-slate-800 outline-none focus:border-accent-400 focus:ring-2 focus:ring-accent-100 disabled:opacity-70 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-accent-900/50"
           />
         </div>
       ) : (
@@ -114,7 +114,7 @@ export function Quiz({ question, type = 'single', options = [], answer, index, c
               if (shouldBePicked) tone = 'border-emerald-400 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950/40'
               else if (picked) tone = 'border-rose-400 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/40'
             } else if (picked) {
-              tone = 'border-indigo-400 bg-indigo-50 dark:border-indigo-600 dark:bg-indigo-950/40'
+              tone = 'border-accent-400 bg-accent-50 dark:border-accent-600 dark:bg-accent-950/40'
             }
 
             return (
@@ -124,7 +124,7 @@ export function Quiz({ question, type = 'single', options = [], answer, index, c
                   onClick={() => toggle(i)}
                   disabled={submitted}
                   className={`flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left text-[0.9rem] leading-relaxed transition-colors ${tone} ${
-                    submitted ? 'cursor-default' : 'hover:border-indigo-300 dark:hover:border-indigo-600'
+                    submitted ? 'cursor-default' : 'hover:border-accent-300 dark:hover:border-accent-600'
                   }`}
                 >
                   <span className="mt-0.5 w-3.5 shrink-0 text-xs font-semibold text-slate-400 dark:text-slate-500">
@@ -150,7 +150,7 @@ export function Quiz({ question, type = 'single', options = [], answer, index, c
             type="button"
             onClick={() => setSubmitted(true)}
             disabled={!canSubmit}
-            className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg bg-accent-600 px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
             提交
           </button>

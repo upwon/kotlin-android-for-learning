@@ -1,12 +1,10 @@
+<!--
+  纯色底 + 一个 K。原来的紫→粉渐变是各家生成式工具的默认长相，换成单色。
+  这里的色值是 app/globals.css 里 --color-accent-600 的 sRGB 值，
+  换主题色时一并改这一处（SVG 读不到 CSS 变量）。
+-->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <defs>
-    <linearGradient id="g" x1="0" y1="64" x2="64" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#4f46e5" />
-      <stop offset="0.55" stop-color="#7c3aed" />
-      <stop offset="1" stop-color="#e11d48" />
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="14" fill="url(#g)" />
+  <rect width="64" height="64" rx="14" fill="#127f89" />
   <path
     d="M20 16h7v14.5L40.5 16H49L34.5 31.6 49 48h-9.2L27 33.8V48h-7z"
     fill="#fff"

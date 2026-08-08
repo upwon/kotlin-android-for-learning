@@ -41,7 +41,7 @@ export default async function DocPage({ params }: PageProps) {
       <div className="min-w-0 flex-1">
         <header className="mb-10">
           {part && (
-            <p className="mb-2 text-[0.8125rem] font-medium text-indigo-600 dark:text-indigo-400">
+            <p className="mb-2 text-[0.8125rem] font-medium text-accent-600 dark:text-accent-400">
               {part.title}
             </p>
           )}
@@ -74,13 +74,13 @@ export default async function DocPage({ params }: PageProps) {
           {prev ? (
             <Link
               href={`/docs/${prev.slug}`}
-              className="group rounded-xl border border-slate-200 px-4 py-3.5 transition-colors hover:border-indigo-400 dark:border-slate-800 dark:hover:border-indigo-600"
+              className="group rounded-xl border border-slate-200 px-4 py-3.5 transition-colors hover:border-accent-400 dark:border-slate-800 dark:hover:border-accent-600"
             >
               <span className="mb-1 flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500">
                 <ArrowLeftIcon size={13} />
                 上一课
               </span>
-              <span className="text-sm font-medium text-slate-700 group-hover:text-indigo-700 dark:text-slate-200 dark:group-hover:text-indigo-300">
+              <span className="text-sm font-medium text-slate-700 group-hover:text-accent-700 dark:text-slate-200 dark:group-hover:text-accent-300">
                 {lessonLabel(prev)}
               </span>
             </Link>
@@ -90,13 +90,13 @@ export default async function DocPage({ params }: PageProps) {
           {next && (
             <Link
               href={`/docs/${next.slug}`}
-              className="group rounded-xl border border-slate-200 px-4 py-3.5 text-right transition-colors hover:border-indigo-400 sm:col-start-2 dark:border-slate-800 dark:hover:border-indigo-600"
+              className="group rounded-xl border border-slate-200 px-4 py-3.5 text-right transition-colors hover:border-accent-400 sm:col-start-2 dark:border-slate-800 dark:hover:border-accent-600"
             >
               <span className="mb-1 flex items-center justify-end gap-1.5 text-xs text-slate-400 dark:text-slate-500">
                 下一课
                 <ArrowRightIcon size={13} />
               </span>
-              <span className="text-sm font-medium text-slate-700 group-hover:text-indigo-700 dark:text-slate-200 dark:group-hover:text-indigo-300">
+              <span className="text-sm font-medium text-slate-700 group-hover:text-accent-700 dark:text-slate-200 dark:group-hover:text-accent-300">
                 {lessonLabel(next)}
               </span>
             </Link>

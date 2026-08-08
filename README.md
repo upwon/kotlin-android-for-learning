@@ -89,6 +89,25 @@ npm run gen
 > ⚠️ 大纲文本里出现 `Array<T>`、`List<out E>` 这类尖括号时要用反引号包起来，
 > 否则 MDX 会把它当成 JSX 标签。
 
+### 换主题色
+
+全站没有任何写死的具体色名，一律走 `accent-*` 色阶，色阶只在
+`app/globals.css` 的 `@theme` 块里定义一次。换色相：
+
+```bash
+npm run palette -- 38 0.145   # 参数是 OKLCH 色相 与 峰值彩度
+```
+
+脚本会按 Tailwind 的明度曲线算出整套 `--color-accent-50 ~ 950`，
+按 sRGB 色域裁剪彩度，并打印几组关键对比度（正文链接、按钮白字、深色底）。
+把输出粘回 `@theme`，再把 `600` 的十六进制值同步到 `app/icon.svg` 即可。
+
+`globals.css` 的注释里已经存了几套调平过的备选色阶，可以直接整段替换。
+
+> 选色时避开 Callout 已经占用的语义色：`tip` 是 sky、`warn` 是 amber、
+> `success` 是 emerald、`java` 是 orange。主题色撞上其中之一，
+> 页面里就会分不清「这是链接」还是「这是一条警告」。
+
 ## 部署到 Vercel
 
 1. 登录 [vercel.com](https://vercel.com) → **Add New Project** → Import 这个 repo
