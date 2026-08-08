@@ -45,9 +45,13 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
 
   const searching = query.trim().length > 0
 
+  // 背景必须是不透明色：窄屏下这是一块浮在正文之上的抽屉，
+  // 任何透明度都会让正文的字透上来，章节名直接糊掉。
+  // 浅色用 slate-50、深色用 slate-900，比正文底色差一档，
+  // 既能和正文区分开，又不牺牲可读性。
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 w-[17rem] shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50/70 pt-14 transition-transform lg:sticky lg:top-14 lg:z-0 lg:h-[calc(100vh-3.5rem)] lg:translate-x-0 lg:pt-0 dark:border-slate-800/80 dark:bg-slate-900/30 ${
+      className={`fixed inset-y-0 left-0 z-40 w-[17rem] shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 pt-14 shadow-xl transition-transform lg:sticky lg:top-14 lg:z-0 lg:h-[calc(100vh-3.5rem)] lg:translate-x-0 lg:pt-0 lg:shadow-none dark:border-slate-800 dark:bg-slate-900 ${
         open ? 'translate-x-0' : '-translate-x-full'
       }`}
     >
@@ -62,7 +66,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
             onChange={(e) => setQuery(e.target.value)}
             placeholder="筛选章节"
             aria-label="筛选章节"
-            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-3 text-[0.8125rem] text-slate-800 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-3 text-[0.8125rem] text-slate-800 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           />
         </div>
 
