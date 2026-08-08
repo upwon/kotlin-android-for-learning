@@ -1,24 +1,116 @@
 <SourceMap
   entries={[
-    { path: "codex-rs/app-server-protocol/src", note: "带 schema 派生的协议类型", dir: true },
-    { path: "sdk/typescript/src", note: "消费端", dir: true },
+    { path: 'codex-rs/app-server-protocol/src/export.rs', note: '导出逻辑' },
+    { path: 'codex-rs/app-server-protocol/src/precomputed_exports.rs', note: '预计算的导出产物（含 zstd 压缩的基线）' },
+    { path: 'codex-rs/app-server-protocol/src/protocol/v2', note: '带 JsonSchema / TS 派生的协议类型', dir: true },
+    { path: 'sdk/typescript/src', note: '消费端', dir: true },
   ]}
 />
 
-## 学习提纲
+```bash
+codex app-server generate-ts --out DIR
+codex app-server generate-json-schema --out DIR
+```
 
-- 为什么不手写 TypeScript 类型
-- generate-ts / generate-json-schema 两个子命令
-- 生成物与二进制版本严格对应意味着什么
-- TypeScript SDK 如何消费它
+<Callout type="success" title="README 里最重要的一句">
 
-<Callout type="note" title="这一章还是骨架">
+> Each output is specific to the version of Codex you used to run the command, so the generated
+> artifacts are guaranteed to match that version.
 
-正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
-配合提纲自己读一遍，比等这里写完更快。
+**你手上这个二进制的协议定义，就是这个二进制自己吐出来的。** 不存在"文档写的是 0.9，
+装的是 0.11"这种事。
+
+</Callout>
+
+## 唯一真相是 Rust 类型
+
+协议类型上挂着两个派生宏：
+
+```rust
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+pub struct ThreadStartParams { /* … */ }
+```
+
+- `JsonSchema`（schemars）→ 生成 JSON Schema
+- `TS`（ts-rs）→ 生成 TypeScript 类型
+
+于是整条链是单向的：
+
+<Diagram
+  label="协议定义的派生关系"
+  caption="所有语言的定义都是派生物。改协议只有一个地方能改。"
+  art={`
+                  Rust 类型（唯一真相）
+                  app-server-protocol/src/protocol/**
+                            │
+              ┌─────────────┼─────────────┐
+              ▼             ▼             ▼
+        serde 序列化   JsonSchema      TS 派生
+        （线上报文）        │             │
+                          ▼             ▼
+                  generate-json-schema  generate-ts
+                          │             │
+                          ▼             ▼
+                    JSON Schema      *.d.ts
+                          │             │
+                          └──────┬──────┘
+                                 ▼
+                      SDK / 第三方客户端 / 校验工具
+`}
+/>
+
+## 为什么不手写 TypeScript 类型
+
+因为手写的定义**一定会漂**。137 个请求、71 个通知、9 个反向请求，加上它们的参数与
+响应类型——这个规模下，人工同步是不可能维持的。
+
+更微妙的一点：**漂移是静默的**。手写的 TS 类型和 Rust 类型不一致时，
+TypeScript 编译器照样通过，问题要到运行时才暴露，而且表现是"某个字段莫名其妙是 undefined"。
+
+## 预计算的基线
+
+`precomputed_exports.rs` 里 include 了两个 zstd 压缩的 JSON：
+
+```rust
+const STABLE_EXPORTS: &[u8] =
+    include_bytes!("../schema/precomputed/app-server-exports-stable.json.zst");
+const EXPERIMENTAL_EXPORTS: &[u8] =
+    include_bytes!("../schema/precomputed/app-server-exports-experimental.json.zst");
+```
+
+稳定面和实验面**分成两份**（对应 2.12 的门控）。把导出结果预计算并入库，
+好处是可以在 CI 里做**差异检查**——协议改了但没有对应的 changelog / 版本处理时能被发现。
+
+<Callout type="design" title="生成物入库这件事">
+
+生成的东西该不该提交进仓库，是个老争论。这里选择入库，理由很实际：
+**它让"协议变了"这件事出现在 code review 的 diff 里**。
+
+否则一个看起来无害的字段重命名，要等到有人跑生成命令才会被注意到。
+
+</Callout>
+
+## SDK 怎么消费
+
+TypeScript SDK（`sdk/typescript`）用的是生成出来的类型。
+不过要注意 1.1 里提过的一点：**TS SDK 本身走的是 `codex exec --experimental-json` 子进程**，
+不是直接说 app-server 协议——它消费的是事件类型，不是完整的请求面。
+
+真正端到端消费这套 schema 的是 IDE 扩展与桌面端。
+
+## 给第三方集成者的建议
+
+<Callout type="tip" title="不要照着文档手写类型">
+
+1. 用**你实际会分发的那个 Codex 版本**跑 `generate-ts`；
+2. 把产物纳入你自己的构建；
+3. 升级 Codex 版本时重新生成，让编译器告诉你哪里坏了。
+
+这比读 README 抄字段名可靠得多——README 会过时，生成物不会。
 
 </Callout>
 
 ## 一句话结论
 
-协议的唯一真相是 Rust 类型，其它语言的定义全是派生物。
+协议的唯一真相是 Rust 类型，其它语言的定义全是派生物；把生成物入库，
+是为了让协议变更出现在 diff 里。

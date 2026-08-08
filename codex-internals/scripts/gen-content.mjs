@@ -395,6 +395,7 @@ const parts = [
           { path: 'codex-rs/app-server-protocol/src', note: '带 schema 派生的协议类型', dir: true },
           { path: 'sdk/typescript/src', note: '消费端', dir: true },
         ],
+        deep: true,
       },
       {
         num: '2.12',
@@ -412,6 +413,7 @@ const parts = [
           { path: 'codex-rs/codex-experimental-api-macros/src', note: '门控用的宏', dir: true },
           { path: 'codex-rs/app-server/README.md', note: 'Experimental API Opt-in 一节' },
         ],
+        deep: true,
       },
       {
         num: '2.13',
@@ -430,6 +432,7 @@ const parts = [
           { path: 'codex-rs/cli/src/remote_control_cmd.rs', note: 'CLI 侧入口' },
           { path: 'codex-rs/app-server/src/request_processors/remote_control_processor', note: '远程控制的处理器', dir: true },
         ],
+        deep: true,
       },
     ],
   },

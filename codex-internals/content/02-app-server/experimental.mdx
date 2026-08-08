@@ -1,24 +1,163 @@
 <SourceMap
   entries={[
-    { path: "codex-rs/codex-experimental-api-macros/src", note: "门控用的宏", dir: true },
-    { path: "codex-rs/app-server/README.md", note: "Experimental API Opt-in 一节" },
+    { path: 'codex-rs/app-server-protocol/src/experimental_api.rs', note: '门控的核心机制' },
+    { path: 'codex-rs/codex-experimental-api-macros/src', note: '配套的派生宏', dir: true },
+    { path: 'codex-rs/app-server/README.md', note: 'Experimental API Opt-in 一节' },
+    { path: 'codex-rs/app-server-protocol/src/protocol/common.rs', note: '#[experimental(...)] 标注就写在请求定义上' },
   ]}
 />
 
-## 学习提纲
+一个要长期演进、又已经有一堆外部客户端的协议，需要一种办法：
+**让新东西在默认情况下根本不存在**。
 
-- 客户端显式 opt-in 的机制
-- codex-experimental-api-macros 做了什么
-- 未 opt-in 的客户端会看到什么
-- 这套门控对协议演进的意义
+## 客户端显式 opt-in
 
-<Callout type="note" title="这一章还是骨架">
+```json
+{
+  "method": "initialize",
+  "params": {
+    "clientInfo": { "name": "my_client", "version": "0.1.0" },
+    "capabilities": { "experimentalApi": true }
+  }
+}
+```
 
-正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
-配合提纲自己读一遍，比等这里写完更快。
+不开这个开关，实验性的方法和字段对这条连接不可见。
+
+## 两级粒度
+
+门控不只在方法级，还能到**字段级**。看协议定义就能看出来：
+
+```rust
+#[experimental("server/diagnostics")]
+/// Read content-free, process-local diagnostics.
+ServerDiagnostics => "server/diagnostics" {
+    params: v2::ServerDiagnosticsParams,
+    serialization: None,
+    response: v2::ServerDiagnosticsResponse,
+},
+
+// 只有部分字段是实验性的，所以要逐字段检查
+ThreadStart => "thread/start" {
+    params: v2::ThreadStartParams,
+    inspect_params: true,
+    serialization: None,
+    response: v2::ThreadStartResponse,
+},
+```
+
+`inspect_params: true` 那一行的意思是：**这个方法本身是稳定的，
+但它的参数里混着实验性字段，得逐个查**。
+
+`thread/start` 就是典型：方法早就稳定了，但 `historyMode`、`allowProviderModelFallback`、
+`runtimeWorkspaceRoots`、`environments`、`selectedCapabilityRoots` 这些都还在实验中。
+
+## 机制：一个 trait + inventory
+
+```rust
+/// Marker trait for protocol types that can signal experimental usage.
+pub trait ExperimentalApi {
+    /// Returns a short reason identifier when an experimental method or field is
+    /// used, or `None` when the value is entirely stable.
+    fn experimental_reason(&self) -> Option<&'static str>;
+}
+```
+
+关键在于它对容器类型的实现：
+
+```rust
+impl<T: ExperimentalApi> ExperimentalApi for Option<T> {
+    fn experimental_reason(&self) -> Option<&'static str> {
+        self.as_ref().and_then(ExperimentalApi::experimental_reason)
+    }
+}
+
+impl<T: ExperimentalApi> ExperimentalApi for Vec<T> {
+    fn experimental_reason(&self) -> Option<&'static str> {
+        self.iter().find_map(ExperimentalApi::experimental_reason)
+    }
+}
+```
+
+<Callout type="success" title="为什么这几行很重要">
+
+实验性字段常常藏在**嵌套结构里**：一个稳定的 `Vec<Environment>`，
+里面某个 `Environment` 有个实验性的 `runtimeWorkspaceRoots`。
+
+有了这几个 blanket impl，检查会**自动递归下去**。作者只需要在最里层标注一次，
+不用在每一层手写传递逻辑——漏标的可能性大大降低。
 
 </Callout>
 
+字段级的注册用 `inventory`：
+
+```rust
+pub struct ExperimentalField {
+    pub type_name: &'static str,
+    pub field_name: &'static str,
+    /// Convention: `<method>` for method-level gates or `<method>.<field>` for field-level gates.
+    pub reason: &'static str,
+}
+
+inventory::collect!(ExperimentalField);
+```
+
+`inventory` 是链接期收集：分散在各个模块里的标注，在运行时能被一次性枚举出来。
+`experimental_fields()` 拿到全表，导出 schema 时就能把稳定面和实验面**分成两份**（2.11）。
+
+## 未 opt-in 的客户端看到什么
+
+一条统一的错误消息：
+
+```rust
+pub fn experimental_required_message(reason: &str) -> String {
+    format!("{reason} requires experimentalApi capability")
+}
+```
+
+`reason` 的命名约定是 `<method>` 或 `<method>.<field>`，所以报错是精确的——
+客户端一眼能看出是哪个方法、哪个字段触发的。
+
+## 这套设计换来什么
+
+<Callout type="design" title="「默认不可见」比「文档里写着别用」强在哪">
+
+如果只是在文档里标注"实验性，可能变"：
+
+- 总有人会用，然后在你改动时炸掉；
+- 你无法知道**谁在用**；
+- 你也无法在导出的类型里把它和稳定面分开。
+
+改成显式 opt-in 之后：
+
+- 用了实验特性的客户端**主动声明过**，改动时的责任归属是清楚的；
+- 稳定客户端的 schema 里根本没有这些字段，不会误用；
+- CI 可以对稳定面的 schema 做严格的差异检查（2.11 那两个 zst 文件）。
+
+代价是每个新字段都要写一行标注。对一个有外部客户端的协议来说，这个代价很便宜。
+
+</Callout>
+
+<Quiz
+  question="thread/start 是稳定方法，但它的定义里写了 inspect_params: true。这意味着什么？"
+  type="single"
+  options={[
+    '这个方法整体是实验性的，需要 opt-in 才能调用',
+    '方法本身稳定，但参数里有实验性字段，需要逐字段检查',
+    '这个方法的参数需要额外的 schema 校验',
+    '这个方法不参与请求排队',
+  ]}
+  answer={1}
+>
+
+方法级的门控是 `#[experimental("...")]`；`inspect_params: true` 是字段级的开关，
+表示"进来之后要递归检查参数里有没有实验性字段"。
+
+`thread/start` 正是这种情况：谁都能调，但 `historyMode`、`environments` 这些字段
+要 opt-in 之后才认。
+
+</Quiz>
+
 ## 一句话结论
 
-一个长期演进的协议，需要「默认不可见」而不是「文档里写着别用」。
+一个长期演进的协议，需要「默认不可见」，而不是「文档里写着别用」。

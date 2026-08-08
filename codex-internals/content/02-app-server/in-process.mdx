@@ -1,26 +1,186 @@
 <SourceMap
   entries={[
-    { path: "codex-rs/app-server/src/in_process.rs", note: "进程内运行时" },
-    { path: "codex-rs/app-server-client/src/lib.rs", note: "给前端用的门面" },
-    { path: "codex-rs/tui/src/app_server_session.rs", note: "TUI 侧的调用面" },
+    { path: 'codex-rs/app-server/src/in_process.rs', note: '进程内运行时，模块注释是全仓库最好的一段设计说明' },
+    { path: 'codex-rs/app-server-client/src/lib.rs', note: '给前端用的门面' },
+    { path: 'codex-rs/tui/src/app_server_session.rs', note: 'TUI 侧的调用面' },
+    { path: 'codex-rs/exec/src/lib.rs', note: 'codex exec 走的是同一条路' },
   ]}
 />
 
-## 学习提纲
+这是 Codex 架构里最值得学的一手：**让自家前端也当客户端，但不付进程间通信的代价**。
 
-- 为什么不让 TUI 直接调 codex-core
-- InProcessClientHandle：用内存 channel 换掉 stdio
-- 「transport-local but not protocol-free」这句话的含金量
-- codex-app-server-client 这层门面做了什么
-- 这套设计带来的测试红利
+## 问题
 
-<Callout type="note" title="这一章还是骨架">
+TUI 和内核在同一个进程里。最省事的做法是直接 `use codex_core::…`。
+但那样一来：
 
-正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
-配合提纲自己读一遍，比等这里写完更快。
+- 官方 TUI 会长出一堆只有它做得到的能力，协议慢慢变成"公开 API 的子集"；
+- 第三方前端遇到的 bug，官方前端遇不到；
+- 内核的每次改动要同时照顾两条调用路径。
+
+反过来，如果 TUI 老老实实 spawn 一个 app-server 子进程走 stdio，
+就要付出进程管理、JSON 序列化、管道往返的代价——对一个本地终端 UI 来说不划算。
+
+## 解法
+
+**保留协议，换掉 transport。**
+
+> This module runs the existing `MessageProcessor` and outbound routing logic on Tokio tasks,
+> but replaces socket/stdio transports with bounded in-memory channels. The intent is to preserve
+> app-server semantics while avoiding a process boundary for CLI surfaces that run in the same process.
+
+<Diagram
+  label="in-process 与跨进程的对照"
+  caption="虚线框里的东西是完全一样的代码。差别只在最上面那一层怎么把消息递进来。"
+  art={`
+   跨进程（IDE 扩展）                   进程内（TUI / codex exec）
+
+   ┌─────────────┐                     ┌─────────────────────┐
+   │  客户端进程  │                     │  codex 进程          │
+   └──────┬──────┘                     │  ┌───────────────┐  │
+          │ JSON over stdio            │  │ TUI / exec    │  │
+          ▼                            │  └───────┬───────┘  │
+   ┌─────────────┐                     │          │ 类型化    │
+   │ 反序列化     │                     │          │ ClientRequest
+   └──────┬──────┘                     │          ▼          │
+          │                            │  ┌───────────────┐  │
+          │                            │  │ 内存 channel  │  │
+          ▼                            │  └───────┬───────┘  │
+  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─┐
+  │        handle_client_request  ←──────────────┘           │
+  │        MessageProcessor                                  │
+  │        request_processors                                │
+  │        codex-core                                        │
+  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘
+`}
+/>
+
+## 关键的那句话
+
+> The runtime is **transport-local but not protocol-free**. Incoming requests are typed
+> `ClientRequest` values, yet responses still come back through the same JSON-RPC result envelope
+> that `MessageProcessor` uses for stdio and websocket transports. This keeps in-process behavior
+> aligned with app-server rather than creating a second execution contract.
+
+<Callout type="success" title="「不创造第二套执行契约」">
+
+这句话是整段设计的题眼。
+
+省掉 JSON 字符串很容易；难的是**忍住不顺手多开几个后门**。
+响应仍然走同一个 JSON-RPC 结果信封——哪怕两边都在同一个进程里、
+哪怕这一步看起来纯属多余。
+
+因为一旦允许"进程内可以走捷径"，捷径就会越来越多，最后又回到了两套实现。
 
 </Callout>
 
+## 生命周期：四步
+
+```text
+1. 用 InProcessStartArgs 构造运行时状态
+2. 调 start()，它在内部完成 initialize / initialized 握手，
+   返回一个已就绪的 InProcessClientHandle
+3. request() 发请求、notify() 发通知、next_event() 消费事件
+4. shutdown() 结束
+```
+
+注意第 2 步：**握手是自动做掉的**。这是门面层的职责，调用方不用管（对照 2.3）。
+
+## 两层：handle 与门面
+
+模块注释里明确划了界：
+
+> This module provides the low-level runtime handle (`InProcessClientHandle`).
+> Higher-level callers (TUI, exec) should go through `codex-app-server-client`, which wraps this
+> module behind a worker task with async request/response helpers, surface-specific startup policy,
+> and bounded shutdown.
+
+`codex-app-server-client` 这层门面做的事：
+
+- 运行时启动与 initialize 能力握手；
+- 类型化的启动身份（`SessionSource` + 客户端名）；
+- 类型化与原始两种请求 / 通知分发；
+- 服务端请求的解决与拒绝；
+- 事件消费，带背压信号（`InProcessServerEvent::Lagged`）；
+- 有界的优雅关闭，超时后 abort 兜底。
+
+## 一个容易漏掉的设计
+
+门面暴露的类型是这样的：
+
+```rust
+pub enum AppServerClient {
+    InProcess(InProcessAppServerClient),
+    Remote(RemoteAppServerClient),
+}
+```
+
+**TUI 面对的是这个枚举，不是具体的 in-process 客户端。** 也就是说：
+
+同一个 TUI，既可以驱动进程内的 app-server，也可以连一个**远程的** app-server。
+`app_server_session.rs` 里那句 `matches!(&self.client, AppServerClient::InProcess(_))`
+就是在判断"我现在是本地还是远程"。
+
+<Callout type="design" title="这才是「协议化」真正的回报">
+
+如果 TUI 当初直接调 `codex_core`，"让终端 UI 连一台远程机器上的 Codex"
+就是一个需要重写整个前端的需求。
+
+现在它只是一个 enum 多一个变体。
+
+</Callout>
+
+## 背压：进程内也一样有
+
+进程内并不意味着无限快。同样是有界 channel，同样有那条不变量：
+
+> Command submission uses `try_send` and can return `WouldBlock`, while event fanout may drop
+> notifications under saturation. Server requests are never silently abandoned…
+
+细节在 2.9。
+
+## 测试上的回报
+
+这套设计最直接的副产品是**测试可以在协议层做**：
+
+- `codex-app-server-test-client` 能像真客户端一样驱动整个服务端，不用起终端；
+- TUI 的测试可以起一个内嵌的 app-server（`start_test_embedded_app_server`），
+  跑完整链路而不 spawn 进程；
+- 协议层的断言对所有前端都成立。
+
+## 迁移还没完
+
+<Callout type="warn" title="看到 legacy_ 前缀就知道了">
+
+TUI 里还有 `legacy_core::config::Config` 这样的引用——那是**还没迁完**的直连内核路径。
+
+把一个已经存在的、直接调库的前端改造成协议客户端，是个漫长的过程。
+这个仓库正处在过程中间，读代码时要意识到这一点：
+你看到的一部分 TUI 代码属于旧世界，一部分属于新世界。
+
+</Callout>
+
+<Quiz
+  question="in-process 模式相对于跨进程 stdio，省掉了什么、保留了什么？"
+  type="multi"
+  options={[
+    '省掉了：JSON 字符串的序列化与反序列化',
+    '省掉了：进程边界与管道往返',
+    '省掉了：JSON-RPC 的响应信封——进程内直接返回 Rust 类型',
+    '保留了：MessageProcessor、request_processors、排队与背压的全部逻辑',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+**C 是错的**，而且这正是这个设计最关键的一处克制：响应**仍然**走同一个 JSON-RPC
+结果信封。模块注释里那句 "transport-local but not protocol-free" 说的就是它。
+
+看起来多余，但正因为不走捷径，进程内与跨进程的行为才在语义上必然一致——
+不是靠约定，是靠只有一份实现。
+
+</Quiz>
+
 ## 一句话结论
 
-让自家前端走和第三方一样的协议，是保证协议不腐坏的最有效手段。
+让自家前端走和第三方一样的协议，是保证协议不腐坏的最有效手段；
+而 in-process 让这件事的成本降到可以接受。

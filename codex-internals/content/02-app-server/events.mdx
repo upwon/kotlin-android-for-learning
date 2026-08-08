@@ -1,26 +1,150 @@
 <SourceMap
   entries={[
-    { path: "codex-rs/app-server/README.md", note: "Events 一节列了全部事件" },
-    { path: "codex-rs/app-server/src/bespoke_event_handling.rs", note: "需要特殊处理的事件" },
-    { path: "codex-rs/core/src/event_mapping.rs", note: "内核事件 → 协议事件的映射" },
+    { path: 'codex-rs/app-server/README.md', note: 'Events 一节列了全部事件' },
+    { path: 'codex-rs/app-server-protocol/src/protocol/common.rs', note: 'ServerNotification 的 71 个变体' },
+    { path: 'codex-rs/app-server/src/bespoke_event_handling.rs', note: '需要特殊处理的事件' },
+    { path: 'codex-rs/core/src/event_mapping.rs', note: '内核事件 → 协议事件的映射' },
   ]}
 />
 
-## 学习提纲
+协议的另一半：**服务端主动推给客户端的东西**。前端的复杂度几乎全在这一侧，
+请求那一侧是简单的。
 
-- 事件的订阅模型：跟着 thread 走，不是全局广播
-- turn 事件的粒度：item 增删改、token 用量、状态迁移
-- 通知退订（notification opt-out）：前端可以只要自己画得出来的
-- 实验性事件：fuzzy file search、realtime、Windows 沙箱安装
-- 事件丢失时会发生什么（Lagged）
+## 一条铁律
 
-<Callout type="note" title="这一章还是骨架">
+> The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
 
-正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
-配合提纲自己读一遍，比等这里写完更快。
+**永远是这三段。** 不管这个 item 是一条助手消息、一次命令执行、一次文件改动，
+还是一次 MCP 工具调用。
+
+```text
+item/started               →  在 UI 里插一个卡片，状态 = 进行中
+item/…/delta（0 到 n 条）  →  往卡片里追加内容
+item/completed             →  最终状态与数据，这条是权威的
+```
+
+<Callout type="warn" title="以 item/completed 为准，不要以 delta 的累加为准">
+
+README 里对审批流程特别强调了这一点：`item/completed` 带着
+`status: "completed" | "failed" | "declined"` 和执行输出，
+**"Render this as the authoritative result"**。
+
+delta 是给"看起来在动"用的，不是数据源。中途被中断、被拒绝、失败，
+delta 累加出来的东西都不对。
 
 </Callout>
 
+## 71 种通知，按家族分
+
+| 家族 | 举例 | 用途 |
+| --- | --- | --- |
+| thread 生命周期 | `thread/started` `thread/closed` `thread/archived` `thread/status/changed` | 会话列表 UI |
+| thread 元信息 | `thread/name/updated` `thread/goal/updated` `thread/tokenUsage/updated` `thread/compacted` | 侧栏 / 状态条 |
+| turn 生命周期 | `turn/started` `turn/completed` `turn/diff/updated` `turn/plan/updated` | 主界面 |
+| item 生命周期 | `item/started` `item/completed` | 卡片增删 |
+| item 流式 | `item/agentMessage/delta` `item/reasoning/textDelta` `item/commandExecution/outputDelta` `item/plan/delta` | 逐字渲染 |
+| 模型侧 | `model/rerouted` `model/verification` `model/safetyBuffering/updated` | 提示用户"后端换模型了" |
+| 环境 / MCP | `mcpServer/startupStatus/updated` `mcpServer/oauthLogin/completed` `thread/environment/connected` | 连接状态 |
+| 诊断类 | `warning` `guardianWarning` `configWarning` `deprecationNotice` | 非致命提示 |
+| 实验性 | `fuzzyFileSearch/*` `thread/realtime/*` | 按需订阅 |
+
+## 两个很有用的聚合事件
+
+大多数事件是增量的，但有两个是**快照**，专门为了让前端省事：
+
+**`turn/diff/updated`** —— 每次有 fileChange item 之后发一次，内容是
+**整个 turn 到目前为止的聚合 unified diff**。
+
+> UIs can render this to show the full "what changed" view without stitching individual
+> `fileChange` items.
+
+**`turn/plan/updated`** —— 计划变化时发，`plan` 是完整的步骤列表
+（每项 `{ step, status }`，status ∈ pending / inProgress / completed），不是增量。
+
+<Callout type="design" title="什么时候该发快照而不是增量">
+
+增量省带宽，但把"拼装状态"的责任推给了每一个客户端——而且每个客户端都可能拼错。
+
+diff 和 plan 这两样有个共同点：**它们是要被整体展示的**，而且体积可控。
+这时候发快照，比让五个前端各自实现一遍拼装逻辑划算得多。
+
+反过来，`item/agentMessage/delta` 就必须是增量——总不能每个字都重发整段。
+
+</Callout>
+
+## 订阅模型：跟着 thread 走
+
+不是全局广播。`thread/start` / `thread/resume` / `thread/fork` 会**自动订阅**
+该 thread 的 turn 与 item 事件；不想要了就 `thread/unsubscribe`。
+
+## 退订：按方法名，精确匹配
+
+```json
+{
+  "capabilities": {
+    "optOutNotificationMethods": ["thread/started", "item/agentMessage/delta"]
+  }
+}
+```
+
+规则：
+
+- **精确匹配**，没有通配符也没有前缀匹配；
+- 不认识的方法名被**接受并忽略**（所以可以照新版本写，老服务端上不报错）；
+- 只对通知生效，**不影响请求 / 响应 / 错误**。
+
+对着 71 种通知，一个具体前端通常只画得出十几种。把画不出来的退掉，
+stdio 上的流量能降一大截——尤其是逐字 delta 那几种。
+
+<Callout type="tip" title="音频被特意拆出来了">
+
+`thread/realtime/outputAudio/delta` 之所以不做成 `ThreadItem` 而是独立通知，
+README 里给了理由：**这样客户端可以单独退订音频**，而不影响转写文本。
+
+设计通知时留出"能被单独关掉"的粒度，是件很容易被忽略但很值钱的事。
+
+</Callout>
+
+## `serverRequest/resolved`：一个容易漏掉的事件
+
+每当一个反向请求（审批、elicitation、requestUserInput）被解决时，
+服务端会发 `serverRequest/resolved`，带 `{ threadId, requestId }`。
+
+关键在于：**turn 开始、完成、被中断时的清理，也会发同一条通知**。
+
+<Callout type="warn" title="没处理它，UI 就会留下幽灵弹窗">
+
+想象：审批对话框弹出来了，用户还没点，turn 被中断了。
+服务端会清理掉这个 pending 请求并发 `serverRequest/resolved`——
+如果客户端不听这条，那个对话框会一直挂在屏幕上，点哪个按钮都没用。
+
+</Callout>
+
+## 事件可以丢
+
+在背压场景下，事件**允许被丢弃**（in-process 模式里体现为 `Lagged`）。
+而服务端发出的**请求永远不会被静默丢弃**。这条不变量是 2.9 的主题。
+
+<Quiz
+  question="做一个 IDE 前端，下面哪些做法是对的？"
+  type="multi"
+  options={[
+    '用 item/agentMessage/delta 累加出的文本作为最终消息内容保存',
+    '监听 serverRequest/resolved，收到就关掉对应的审批对话框',
+    '用 turn/diff/updated 直接渲染「本轮改了什么」，不必自己拼 fileChange',
+    '在 initialize 里退订自己画不出来的通知，减少 stdio 流量',
+  ]}
+  answer={[1, 2, 3]}
+>
+
+- **A 错**：delta 只用于呈现"正在输出"。权威数据在 `item/completed` 里。
+- **B 对**：不处理它就会留下点不掉的幽灵弹窗。
+- **C 对**：这个事件就是为省掉客户端拼装而设计的。
+- **D 对**：`optOutNotificationMethods` 正是干这个的，精确匹配、未知名字忽略。
+
+</Quiz>
+
 ## 一句话结论
 
-前端的复杂度几乎全在事件这一侧，请求那一侧是简单的。
+前端的复杂度几乎全在事件这一侧；把 item 的三段式生命周期和
+`serverRequest/resolved` 处理对，就成功了一大半。
