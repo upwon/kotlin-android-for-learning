@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/Cargo.toml", note: "workspace" },
+    { path: "MODULE.bazel", note: "Bazel 模块" },
+    { path: "defs.bzl", note: "自定义规则" },
+    { path: "justfile", note: "命令收口" },
+  ]}
+/>
+
+## 学习提纲
+
+- Cargo workspace 的组织与依赖收敛
+- Bazel 那一套：MODULE.bazel、defs.bzl、rbe
+- 两套怎么保持一致
+- justfile 把常用命令收口
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+双构建的代价很实在，换来的是远程缓存与可复现性。

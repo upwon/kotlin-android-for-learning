@@ -1,0 +1,116 @@
+<SourceMap
+  entries={[
+    { path: 'codex-rs/cli/src/main.rs', note: '所有形态的分发入口' },
+    { path: 'codex-rs/app-server/README.md', note: 'app-server 自己对定位的描述' },
+    { path: 'codex-rs/app-server-client/src/lib.rs', note: '前端连内核用的统一门面' },
+    { path: 'codex-rs/exec/src/lib.rs', note: 'codex exec 也走同一条路' },
+  ]}
+/>
+
+同一个 `codex` 二进制，能变成终端 UI、能变成 IDE 的后台服务、能变成 MCP 服务端、
+还能把桌面 app 拉起来。这一章讲清楚它们各自是什么进程形态，以及**公共的下沿在哪**。
+
+## 五种形态
+
+| 你敲的命令 | 得到什么 | 进程形态 |
+| --- | --- | --- |
+| `codex` | 终端交互界面（TUI） | 单进程，app-server 跑在进程内 |
+| `codex exec "..."` | 非交互执行，输出到 stdout | 单进程，同样内嵌 app-server |
+| `codex app-server` | JSON-RPC 服务，等客户端连 | 独立进程，IDE 扩展连它 |
+| `codex mcp-server` | MCP 服务端，把 Codex 变成别人的工具 | 独立进程 |
+| `codex app` | 拉起桌面应用（仅 macOS / Windows） | 启动器，主体是另一个程序 |
+
+再加上两个 SDK。这里有个容易猜错的地方：
+
+<Callout type="warn" title="TypeScript SDK 并不直接说 app-server 协议">
+
+`sdk/typescript` 走的是**子进程 + JSONL**：它 spawn 出
+`codex exec --experimental-json`，往 stdin 写输入，从 stdout 逐行读事件。
+
+</Callout>
+
+## 公共的下沿：app-server，不是 core
+
+最重要的一句话：**这些前端的公共下沿是 `app-server`，不是 `codex-core`。**
+
+TUI 没有直接调 `codex-core` 的 Rust API。它做的事情是：在自己的进程里启动一个
+app-server 运行时，然后像个普通客户端那样，用 JSON-RPC 的**语义**跟它说话。
+`codex exec` 也一样——两者都从 `codex-app-server-client` 这个门面进去。
+
+<Diagram
+  label="进程与协议边界"
+  caption="虚线是进程边界。注意 TUI / exec 那两条：协议还在，只是 transport 换成了内存 channel。"
+  art={`
+   codex (TUI)              codex exec              IDE 扩展 / 桌面端
+        │                        │                          │
+        │  typed request         │  typed request           │  JSON over stdio
+        ▼                        ▼                          ▼
+  ┌───────────────────────────────────────┐        ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+  │      codex-app-server-client          │          进程边界
+  └───────────────────────────────────────┘        └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+        │                                                   │
+        ▼                                                   ▼
+  ┌─────────────────────┐                        ┌─────────────────────┐
+  │  app-server (进程内) │                        │ app-server (独立进程)│
+  └─────────────────────┘                        └─────────────────────┘
+        │                                                   │
+        └────────────────────┬──────────────────────────────┘
+                             ▼
+                    ┌─────────────────┐
+                    │   codex-core    │
+                    └─────────────────┘
+`}
+/>
+
+## 为什么不让前端直接调内核
+
+如果 TUI 直接 `use codex_core::...`，短期会省很多事。Codex 没这么做，代价换来的是三件事：
+
+**协议不会腐坏。** 官方自己的 TUI 就是协议的头号用户。任何一个"只有 Rust 客户端才做得到"的
+后门，第一个受害者是 TUI 自己的开发者。这比任何流程规范都管用。
+
+**前端可以被替换。** IDE 扩展、桌面端、第三方客户端拿到的是**同一套能力**，
+不是"公开 API 的子集"。
+
+**测试可以在协议层做。** `codex-app-server-test-client` 能像真客户端一样驱动整个服务端，
+不需要拉起终端（见 10.2）。
+
+<Callout type="design" title="代价是什么">
+
+不是没有成本。你会在 TUI 里看到 `legacy_core::` 这样的前缀——那是**还没迁完**的直连内核路径。
+把一个已经存在的、直接调库的前端改造成协议客户端，是个漫长的过程，这个仓库正处在过程中间。
+
+序列化、channel 往返也确实带来开销；`in_process` 那一套用内存 channel 把它压到了最低
+（细节见 2.10）。
+
+</Callout>
+
+## 一个二进制扮演多个角色
+
+`codex` 还会以别的名字启动自己——沙箱助手、responses API 代理、stdio↔uds 中继，
+都是同一个可执行文件。这套 **arg0 多态** 在 6.1 展开。它的直接好处是：
+发布产物只有一个文件，而不是一堆需要互相找路径的小工具。
+
+<Quiz
+  question="下面关于 Codex 各前端的说法，哪些是对的？"
+  type="multi"
+  options={[
+    'codex exec 和 TUI 一样，内部启动了一个进程内的 app-server',
+    'IDE 扩展拿到的能力是 TUI 能力的一个子集',
+    'TypeScript SDK 通过 JSON-RPC 直连 app-server',
+    '让官方 TUI 也走协议，主要好处是协议不会因为「内部有捷径」而退化',
+  ]}
+  answer={[0, 3]}
+>
+
+- **A 对**：`codex-rs/exec/src/lib.rs` 里用的就是 `InProcessAppServerClient`。
+- **B 错**：正好相反——大家走同一套协议，所以能力是**同一份**，不存在内部特权通道。
+- **C 错**：TS SDK 是 spawn `codex exec --experimental-json`，按行读 JSONL。
+  真正说 app-server 协议的是 IDE 扩展与桌面端。
+- **D 对**：这是"自家前端也当客户端"这个决定最实在的收益。
+
+</Quiz>
+
+## 一句话结论
+
+Codex 的前端不是「调用内核的库」，而是「连接内核的客户端」——这一点决定了后面所有设计。

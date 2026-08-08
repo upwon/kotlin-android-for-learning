@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/README.md", note: "Events 一节列了全部事件" },
+    { path: "codex-rs/app-server/src/bespoke_event_handling.rs", note: "需要特殊处理的事件" },
+    { path: "codex-rs/core/src/event_mapping.rs", note: "内核事件 → 协议事件的映射" },
+  ]}
+/>
+
+## 学习提纲
+
+- 事件的订阅模型：跟着 thread 走，不是全局广播
+- turn 事件的粒度：item 增删改、token 用量、状态迁移
+- 通知退订（notification opt-out）：前端可以只要自己画得出来的
+- 实验性事件：fuzzy file search、realtime、Windows 沙箱安装
+- 事件丢失时会发生什么（Lagged）
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+前端的复杂度几乎全在事件这一侧，请求那一侧是简单的。

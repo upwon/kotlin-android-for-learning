@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/core/src/stream_events_utils.rs", note: "流式事件规整" },
+    { path: "codex-rs/core/src/event_mapping.rs", note: "映射到协议事件" },
+    { path: "codex-rs/core/src/client_common.rs", note: "公共的流式结构" },
+  ]}
+/>
+
+## 学习提纲
+
+- SSE 分片的解析与重组
+- stream_events_utils 做的规整工作
+- 推理（reasoning）内容的特殊处理
+- 事件在 event_mapping 里被翻译成协议事件
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+流式是「解析 → 规整 → 映射」三段，每段的失败语义都不一样。

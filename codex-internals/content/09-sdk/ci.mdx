@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-cli/scripts/run_in_container.sh", note: "容器脚本" },
+    { path: "codex-cli/scripts/init_firewall.sh", note: "网络限制" },
+    { path: ".github/workflows", note: "仓库自己的用法", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- 非交互下的审批与沙箱默认值
+- 容器里跑：run_in_container.sh 与 init_firewall.sh
+- 输出解析与退出码
+- 仓库自己的 .github 工作流怎么用它
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+CI 场景的关键不是命令行参数，是先想清楚「出事了谁兜底」。

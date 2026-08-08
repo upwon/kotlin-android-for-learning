@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/src/message_processor.rs", note: "中枢本体" },
+    { path: "codex-rs/app-server/src/outgoing_message.rs", note: "出站消息的封装" },
+    { path: "codex-rs/app-server/src/connection_rpc_gate.rs", note: "连接级的准入控制" },
+  ]}
+/>
+
+## 学习提纲
+
+- 入站：transport → 反序列化 → ClientRequest 枚举
+- 分发：按 variant 交给对应的 request processor
+- 出站：OutgoingMessage 与写线程
+- 为什么请求处理是「拆成一堆小 processor」而不是一个大 match
+- 连接级状态：connection_rpc_gate 与 connection_cleanup
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+ClientRequest 是个巨大的枚举，但每个分支都薄——重逻辑全在 processor 里。

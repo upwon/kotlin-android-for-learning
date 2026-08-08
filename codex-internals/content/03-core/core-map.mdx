@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/core/src/lib.rs", note: "模块清单" },
+    { path: "AGENTS.md", note: "The codex-core crate 一节" },
+    { path: "codex-rs/core-api/src", note: "对外 API 层", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- codex-core 的职责边界（AGENTS.md 里有明确表述）
+- core-api 与 codex-api 分别是给谁用的
+- src 下的目录分组：session / tools / context / state / tasks
+- 哪些模块是「热路径」，哪些是外围
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+不要从 lib.rs 顺着读，从 session/turn.rs 倒着读。

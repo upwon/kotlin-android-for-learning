@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-cli/package.json", note: "包定义" },
+    { path: "codex-cli/bin/codex.js", note: "入口 shim" },
+    { path: "codex-cli/scripts/build_npm_package.py", note: "打包脚本" },
+  ]}
+/>
+
+## 学习提纲
+
+- codex-cli 这个包的构成
+- bin/codex.js 做的平台分发
+- build_npm_package.py 打了哪些产物
+- 独立安装器与 GitHub Releases 的关系
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+npm 包只是个壳，真正的东西是各平台的原生二进制。

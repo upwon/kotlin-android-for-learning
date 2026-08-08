@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/cli/src/main.rs", note: "子命令定义" },
+    { path: "codex-rs/arg0/src", note: "arg0 分发", dir: true },
+    { path: "codex-cli/bin/codex.js", note: "npm 包的入口 shim" },
+  ]}
+/>
+
+## 学习提纲
+
+- 三十来个子命令的分组
+- arg0：同一个二进制根据启动名切换行为
+- 隐藏子命令都是干什么的
+- 没有子命令时为什么进 TUI
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+arg0 多态让 Codex 只发一个二进制，却能扮演沙箱助手、代理、中继等多个角色。

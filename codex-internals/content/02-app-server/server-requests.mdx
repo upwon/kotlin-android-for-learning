@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/README.md", note: "Approvals 一节" },
+    { path: "codex-rs/protocol/src/approvals.rs", note: "审批类型" },
+    { path: "codex-rs/core/src/elicitation.rs", note: "elicitation 在内核的实现" },
+  ]}
+/>
+
+## 学习提纲
+
+- 命令执行审批与文件改动审批
+- request_user_input：模型中途向人要信息
+- MCP 服务器的 elicitation 如何透传到最终用户
+- 权限请求与动态工具调用（实验性）
+- 客户端不响应会怎样：超时与拒绝的默认语义
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+审批不是「弹个框」，它是协议里一等的反向 RPC，链路上每一层都要能转发它。

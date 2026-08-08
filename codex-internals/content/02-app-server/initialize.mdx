@@ -1,0 +1,24 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/src/request_processors/initialize_processor.rs", note: "握手的处理器" },
+    { path: "codex-rs/app-server/README.md", note: "Initialization 一节有完整报文样例" },
+  ]}
+/>
+
+## 学习提纲
+
+- clientInfo：name / title / version 会一路带到遥测与 UA
+- 能力协商：客户端声明自己能处理哪些反向请求
+- 握手之后服务端才开始发通知
+- in-process 模式下这一步是自动完成的
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+很多「服务端不给我发事件」的问题，根因是 initialized 这一步没做。

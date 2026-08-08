@@ -1,0 +1,23 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/cli/src/remote_control_cmd.rs", note: "CLI 入口" },
+    { path: "codex-rs/app-server/src/request_processors/remote_control_processor", note: "处理器", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- remote control 的启用方式与安全边界
+- 与 daemon 的关系
+- 暴露的能力子集
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+远程控制是 daemon 的一个受限视图，不是新协议。

@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/src/transport.rs", note: "transport 抽象" },
+    { path: "codex-rs/app-server-transport/src", note: "各 transport 的实现", dir: true },
+    { path: "codex-rs/stdio-to-uds/src", note: "把 stdio 中继到 unix socket", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- stdio（JSONL）：IDE 扩展与大多数客户端的默认选择
+- websocket：实验性，附带 /healthz 与 /readyz 探针
+- unix socket：本地控制面，走 HTTP Upgrade 握手
+- `--listen off`：只做 in-process，不开任何本地监听
+- codex app-server proxy 与 stdio-to-uds 这两个中继
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+transport 只换「字节怎么进出」，上面的 JSON-RPC 语义一模一样。

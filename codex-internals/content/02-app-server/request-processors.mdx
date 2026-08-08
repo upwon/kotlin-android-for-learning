@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/src/request_processors", note: "全部处理器", dir: true },
+    { path: "codex-rs/app-server/src/request_processors/thread_lifecycle.rs", note: "thread 生命周期" },
+    { path: "codex-rs/app-server/src/request_processors/turn_processor.rs", note: "turn 的起停" },
+  ]}
+/>
+
+## 学习提纲
+
+- thread 家族：lifecycle、fork、resume、archive、delete、summary
+- turn 家族：start、interrupt、steer、review
+- 配置家族：config_processor 与 config_manager 的分工
+- 宿主能力家族：fs、git、process_exec、command_exec、search
+- 账号与模型：account_processor、catalog_processor、models_refresh_worker
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+想知道某个功能在哪实现，先在 request_processors 里找同名文件，命中率极高。

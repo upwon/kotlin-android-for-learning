@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/src/in_process.rs", note: "进程内运行时" },
+    { path: "codex-rs/app-server-client/src/lib.rs", note: "给前端用的门面" },
+    { path: "codex-rs/tui/src/app_server_session.rs", note: "TUI 侧的调用面" },
+  ]}
+/>
+
+## 学习提纲
+
+- 为什么不让 TUI 直接调 codex-core
+- InProcessClientHandle：用内存 channel 换掉 stdio
+- 「transport-local but not protocol-free」这句话的含金量
+- codex-app-server-client 这层门面做了什么
+- 这套设计带来的测试红利
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+让自家前端走和第三方一样的协议，是保证协议不腐坏的最有效手段。

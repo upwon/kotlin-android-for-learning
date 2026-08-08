@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/core/src/tools/registry.rs", note: "注册表" },
+    { path: "codex-rs/core/src/tools/router.rs", note: "路由" },
+    { path: "codex-rs/core/src/tools/handlers", note: "各工具的实现", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- registry：工具的登记与可见性
+- router：一次 tool call 怎么找到 handler
+- tool_namespaces：命名空间的必要性
+- hosted_spec：托管工具与本地工具的差别
+- dynamic_tools：运行时增删工具
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+工具列表是每个 turn 重新计算的，不是启动时固定的。

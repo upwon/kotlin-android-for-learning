@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/core/src/client.rs", note: "请求组装与流式解析" },
+    { path: "codex-rs/core/src/responses_retry.rs", note: "重试策略" },
+    { path: "codex-rs/model-provider-info/src", note: "provider 元信息", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- client.rs / client_common.rs 的分工
+- Responses API 与 Chat Completions 的差异如何被抹平
+- 重试：responses_retry 的策略
+- model-provider / model-provider-info：多 provider 的抽象
+- 本地模型：ollama 与 lmstudio 这两个 crate
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+模型层被隔离得很干净，换 provider 不用动 turn 循环。

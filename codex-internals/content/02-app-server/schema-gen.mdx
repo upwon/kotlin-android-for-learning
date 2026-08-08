@@ -1,0 +1,24 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server-protocol/src", note: "带 schema 派生的协议类型", dir: true },
+    { path: "sdk/typescript/src", note: "消费端", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- 为什么不手写 TypeScript 类型
+- generate-ts / generate-json-schema 两个子命令
+- 生成物与二进制版本严格对应意味着什么
+- TypeScript SDK 如何消费它
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+协议的唯一真相是 Rust 类型，其它语言的定义全是派生物。

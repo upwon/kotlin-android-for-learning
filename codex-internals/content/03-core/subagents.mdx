@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/core/src/session/review.rs", note: "review" },
+    { path: "codex-rs/core/src/session/multi_agents.rs", note: "多 agent" },
+    { path: "codex-rs/core/src/codex_delegate.rs", note: "委派" },
+    { path: "codex-rs/agent-graph-store/src", note: "agent 关系存储", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- codex review 的实现路径
+- plan_tool：计划是怎么被当成一等公民的
+- multi_agents 与 codex_delegate
+- agent-graph-store：多 agent 的关系怎么存
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+子 agent 不是新进程，是同一个内核里的另一条 thread。

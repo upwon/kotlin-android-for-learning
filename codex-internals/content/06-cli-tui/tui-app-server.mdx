@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/tui/src/app_server_session.rs", note: "调用门面" },
+    { path: "codex-rs/tui/src/app_server_session/history.rs", note: "历史水合" },
+    { path: "codex-rs/tui/src/app_server_approval_conversions.rs", note: "审批转换" },
+  ]}
+/>
+
+## 学习提纲
+
+- app_server_session：TUI 侧的调用门面
+- 历史水合（hydration）与分页
+- 审批事件如何变成界面上的弹窗
+- legacy_core 这个名字透露了什么
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+TUI 里凡是叫 legacy_ 的，都是还没迁完的直连内核路径。

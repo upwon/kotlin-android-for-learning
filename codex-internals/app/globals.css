@@ -1,0 +1,379 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+/*
+  dark: 变体不再看 prefers-color-scheme，改为看 <html data-theme>。
+  该属性由 <head> 里的内联脚本在首屏绘制前写入（值永远是解析后的
+  light / dark），「跟随系统」的逻辑在 lib/theme.ts 里处理。
+*/
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* ---------------------------------------------------------------------------
+   主题色：砖红 terracotta（hue 38）。
+
+   全站不出现具体色名，一律走 accent-* 色阶，换主题色只需要替换这一段。
+   色阶按 Tailwind 的明度 / 彩度曲线生成：明度固定、彩度按档位缩放，
+   所以换色相不会改变任何一处的明暗关系与对比度。
+
+   选它的原因很实际：姊妹站（Kotlin）用的是墨青，两个站同时开着的时候
+   需要一眼能分清楚；而暖色配大面积代码块里的冷色高亮也不打架。
+--------------------------------------------------------------------------- */
+@theme {
+  --color-accent-50: oklch(0.971 0.01 38);
+  --color-accent-100: oklch(0.936 0.023 38);
+  --color-accent-200: oklch(0.885 0.043 38);
+  --color-accent-300: oklch(0.81 0.072 38);
+  --color-accent-400: oklch(0.715 0.109 38);
+  --color-accent-500: oklch(0.625 0.138 38);
+  --color-accent-600: oklch(0.545 0.145 38);
+  --color-accent-700: oklch(0.47 0.131 38);
+  --color-accent-800: oklch(0.405 0.107 38);
+  --color-accent-900: oklch(0.355 0.087 38);
+  --color-accent-950: oklch(0.245 0.058 38);
+
+  /*
+    两个语义别名：浅色底上用 600，深色底上用 400。
+    焦点环、选中色、光标、正文链接都走它们，不直接引色阶。
+  */
+  --color-accent: var(--color-accent-600);
+  --color-accent-soft: var(--color-accent-400);
+}
+
+/* 让原生控件、滚动条也跟着切换 */
+[data-theme='light'] {
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------------------
+   浏览器自带的那些表面：选中、滚动条、焦点环、光标。
+   不接管的话，页面每次被选中或聚焦都会露出一块「没设计过」的地方。
+--------------------------------------------------------------------------- */
+::selection {
+  background: color-mix(in oklch, var(--color-accent) 22%, transparent);
+  color: inherit;
+}
+
+[data-theme='dark'] ::selection {
+  background: color-mix(in oklch, var(--color-accent-soft) 32%, transparent);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-slate-300) transparent;
+}
+
+[data-theme='dark'] * {
+  scrollbar-color: var(--color-slate-700) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+  background-color: var(--color-slate-300);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-slate-400);
+}
+
+[data-theme='dark'] ::-webkit-scrollbar-thumb {
+  background-color: var(--color-slate-700);
+}
+
+[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-slate-600);
+}
+
+/* 统一焦点环：键盘可达性靠它，鼠标点击时不出现 */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+[data-theme='dark'] :focus-visible {
+  outline-color: var(--color-accent-soft);
+}
+
+input,
+textarea {
+  caret-color: var(--color-accent);
+}
+
+[data-theme='dark'] input,
+[data-theme='dark'] textarea {
+  caret-color: var(--color-accent-soft);
+}
+
+/* ---------------------------------------------------------------------------
+   语法高亮。
+
+   @shikijs/rehype 以 defaultColor:false 模式输出，每个 token 上挂着
+   --shiki-light / --shiki-dark 两组变量，不带任何实际颜色。
+   由这里按 data-theme 挑一组用，切主题是纯 CSS 的事，零运行时。
+
+   背景色刻意**不**用 shiki 主题自带的（github-light 是纯白、github-dark 是
+   #24292e），而是接管成站内的 slate 面，代码块才不会像贴上去的外来物。
+--------------------------------------------------------------------------- */
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+  font-style: var(--shiki-light-font-style);
+  font-weight: var(--shiki-light-font-weight);
+  text-decoration: var(--shiki-light-text-decoration);
+}
+
+[data-theme='dark'] .shiki,
+[data-theme='dark'] .shiki span {
+  color: var(--shiki-dark);
+  font-style: var(--shiki-dark-font-style);
+  font-weight: var(--shiki-dark-font-weight);
+  text-decoration: var(--shiki-dark-text-decoration);
+}
+
+/* 代码块的面：跟站内其它「次级表面」（侧栏、Callout）保持同一档 */
+.codeblock {
+  background: var(--color-slate-50);
+}
+
+[data-theme='dark'] .codeblock {
+  background: color-mix(in oklch, var(--color-slate-900) 70%, transparent);
+}
+
+.codeblock pre.shiki {
+  background: transparent !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Noto Sans Mono', monospace;
+  tab-size: 4;
+}
+
+/* ---------------------------------------------------------------------------
+   正文排版。
+   中文没有词间空格，字面密度比拉丁文高，行高要比英文正文再松一档；
+   标题上方留白大于下方，段落才会成组而不是均匀铺开。
+--------------------------------------------------------------------------- */
+.prose {
+  --tw-prose-body: var(--color-slate-700);
+  font-size: 1rem;
+  line-height: 1.85;
+}
+
+/*
+  正文行宽：中文每行 35–45 字最舒适。
+  这里用 em 而不是 ch —— ch 是「0」字符的宽度，中文下约等于半个字。
+
+  只约束文字块；代码块、图和表格仍占满容器，它们需要宽度，
+  而且各自带独立的横向滚动容器。
+*/
+.prose > :where(p, ul, ol, blockquote, h2, h3, h4) {
+  max-width: 39em;
+}
+
+@media (min-width: 1280px) {
+  .prose > :where(p, ul, ol, blockquote, h2, h3, h4) {
+    max-width: 41em;
+  }
+}
+
+[data-theme='dark'] .prose {
+  --tw-prose-body: var(--color-slate-300);
+}
+
+.prose :where(h2):not(:where([class~='not-prose'] *)) {
+  margin-top: 3.5rem;
+  margin-bottom: 1.25rem;
+  font-size: 1.375rem;
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+  scroll-margin-top: 6rem;
+}
+
+.prose :where(h3):not(:where([class~='not-prose'] *)) {
+  margin-top: 2.25rem;
+  margin-bottom: 0.875rem;
+  font-size: 1.075rem;
+  line-height: 1.5;
+  letter-spacing: -0.015em;
+  scroll-margin-top: 6rem;
+}
+
+.prose :where(p, ul, ol):not(:where([class~='not-prose'] *)) {
+  margin-top: 1.1rem;
+  margin-bottom: 1.1rem;
+}
+
+.prose :where(li):not(:where([class~='not-prose'] *)) {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.prose :where(li > p):not(:where([class~='not-prose'] *)) {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+/* 正文里的行内代码：底色压到刚好能分辨，避免整页布满灰块 */
+.prose :where(code):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
+  border-radius: 0.3rem;
+  background: color-mix(in oklch, var(--color-slate-500) 10%, transparent);
+  padding: 0.1rem 0.32rem;
+  font-weight: 450;
+  font-size: 0.875em;
+}
+
+[data-theme='dark'] .prose :where(code):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
+  background: color-mix(in oklch, var(--color-slate-400) 16%, transparent);
+}
+
+/* 表格：这个站的表格多是「字段 / 类型 / 说明」，行高压紧一点更好扫 */
+.prose :where(table):not(:where([class~='not-prose'] *)) {
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.prose :where(thead th):not(:where([class~='not-prose'] *)) {
+  font-weight: 600;
+  color: var(--color-slate-500);
+}
+
+[data-theme='dark'] .prose :where(thead th):not(:where([class~='not-prose'] *)) {
+  color: var(--color-slate-400);
+}
+
+/* 链接：默认不抢眼，下划线偏移让中文不被划穿 */
+.prose :where(a):not(:where([class~='not-prose'] *)) {
+  color: var(--color-accent);
+  font-weight: 500;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: color-mix(in oklch, var(--color-accent) 35%, transparent);
+  transition: text-decoration-color 150ms;
+}
+
+.prose :where(a):not(:where([class~='not-prose'] *)):hover {
+  text-decoration-color: currentColor;
+}
+
+[data-theme='dark'] .prose :where(a):not(:where([class~='not-prose'] *)) {
+  color: var(--color-accent-soft);
+}
+
+/* 标题锚点：hover 时才浮现，不打扰阅读 */
+.prose :where(h2, h3):not(:where([class~='not-prose'] *)) {
+  position: relative;
+}
+
+.prose :where(h2, h3):not(:where([class~='not-prose'] *))::after {
+  content: '#';
+  position: absolute;
+  margin-left: 0.4em;
+  color: var(--color-slate-300);
+  font-weight: 400;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+
+.prose :where(h2, h3):not(:where([class~='not-prose'] *)):hover::after {
+  opacity: 1;
+}
+
+[data-theme='dark'] .prose :where(h2, h3):not(:where([class~='not-prose'] *))::after {
+  color: var(--color-slate-600);
+}
+
+/* ---------------------------------------------------------------------------
+   Callout / Quiz 内部的富文本
+--------------------------------------------------------------------------- */
+.callout-body > :first-child,
+.quiz-explanation > :first-child {
+  margin-top: 0;
+}
+
+.callout-body > :last-child,
+.quiz-explanation > :last-child {
+  margin-bottom: 0;
+}
+
+.callout-body p,
+.quiz-explanation p {
+  margin: 0.6rem 0;
+}
+
+.callout-body code,
+.quiz-explanation code {
+  border-radius: 0.3rem;
+  background: color-mix(in oklch, var(--color-slate-500) 12%, transparent);
+  padding: 0.1rem 0.32rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86em;
+}
+
+[data-theme='dark'] .callout-body code,
+[data-theme='dark'] .quiz-explanation code {
+  background: color-mix(in oklch, var(--color-slate-400) 18%, transparent);
+}
+
+/* Callout 里的表格与列表：跟着容器收紧 */
+.callout-body table {
+  margin: 0.75rem 0;
+  width: 100%;
+  font-size: 0.875rem;
+  border-collapse: collapse;
+}
+
+.callout-body th,
+.callout-body td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid color-mix(in oklch, var(--color-slate-500) 18%, transparent);
+}
+
+.callout-body th {
+  font-weight: 600;
+}
+
+.callout-body ul,
+.callout-body ol {
+  margin: 0.6rem 0;
+  padding-left: 1.15rem;
+  list-style: disc;
+}
+
+.callout-body ol {
+  list-style: decimal;
+}
+
+.callout-body li {
+  margin: 0.3rem 0;
+}

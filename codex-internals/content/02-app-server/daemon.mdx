@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server-daemon/src", note: "daemon 实现", dir: true },
+    { path: "codex-rs/cli/src/remote_control_cmd.rs", note: "CLI 侧入口" },
+    { path: "codex-rs/app-server/src/request_processors/remote_control_processor", note: "远程控制的处理器", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- daemon 解决的问题：会话不随终端关闭而消失
+- 控制面 socket 的位置与握手
+- remote_control_processor 暴露了哪些能力
+- 与 codex app / IDE 的配合
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+daemon 不是新内核，它只是把同一个 app-server 的生命周期拉长了。

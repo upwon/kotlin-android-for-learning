@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "docs/sandbox.md", note: "面向用户的说明" },
+    { path: "codex-rs/protocol/src/permissions.rs", note: "权限类型" },
+    { path: "codex-rs/core/src/safety.rs", note: "两个维度合流的地方" },
+  ]}
+/>
+
+## 学习提纲
+
+- 威胁模型：不可信的是模型输出，不是用户
+- AskForApproval 的档位与它们的组合语义
+- SandboxPolicy：只读 / 工作区可写 / 完全放开
+- 「沙箱失败就升级为审批」这条兜底规则
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+审批与沙箱是两个正交维度，组合起来才是最终策略。

@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server-protocol/src", note: "thread / turn / item 的协议类型", dir: true },
+    { path: "codex-rs/protocol/src/items.rs", note: "item 的内核定义" },
+    { path: "codex-rs/protocol/src/thread_id.rs", note: "thread id 的类型化处理" },
+  ]}
+/>
+
+## 学习提纲
+
+- thread：一条会话，有 id、有持久化、可 resume / fork / archive
+- turn：一次「用户说话 → agent 干完活」的完整往返
+- item：turn 里的最小可展示单元（消息、命令、diff、推理…）
+- 它们和内核里 Session / Turn / ResponseItem 的对应关系
+- 为什么前端应该按 item 增量渲染而不是按 message
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+thread 是持久的、turn 是短暂的、item 是可展示的——三者不要混用。

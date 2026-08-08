@@ -1,0 +1,26 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/exec-server/src", note: "exec-server", dir: true },
+    { path: "codex-rs/exec-server-protocol/src", note: "协议", dir: true },
+    { path: "codex-rs/exec-server/src/noise_channel.rs", note: "加密通道" },
+  ]}
+/>
+
+## 学习提纲
+
+- 本地 / 远端两套 process 与 file_system 实现
+- 能力发现（capability_discovery）
+- Noise 协议加密的通道
+- environment 的注册与引导
+- 与 code-mode host 的关系
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+把「执行环境」抽象成可替换的东西，云端 agent 与本地 agent 才能共用一套内核。

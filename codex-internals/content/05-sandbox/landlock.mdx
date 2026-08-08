@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/sandboxing/src/landlock.rs", note: "Landlock" },
+    { path: "codex-rs/sandboxing/src/bwrap.rs", note: "bwrap" },
+    { path: "codex-rs/linux-sandbox/src", note: "独立沙箱二进制", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- Landlock + seccomp：内核原生、无需特权
+- bwrap（bubblewrap）：更强的隔离，但要额外依赖
+- codex-linux-sandbox 这个独立二进制的作用
+- 内核版本差异导致的降级
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+Linux 上没有一个到处都能用的沙箱，所以这里必须有两套。

@@ -1,0 +1,24 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/src/in_process.rs", note: "注释里把背压策略讲得最清楚" },
+    { path: "codex-rs/app-server/src/error_code.rs", note: "错误码定义" },
+  ]}
+/>
+
+## 学习提纲
+
+- 三段有界队列：ingress → 处理 → outbound
+- 过载时返回 -32001，客户端应做带抖动的指数退避
+- 事件可以丢，服务端请求不可以丢——两种失败语义
+- in-process 模式下的 WouldBlock
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+「事件允许丢、请求必须回」这条不变量，是整个审批链不会挂死的原因。

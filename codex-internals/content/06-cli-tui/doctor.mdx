@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/cli/src/doctor", note: "doctor", dir: true },
+    { path: "codex-rs/cli/src/debug_sandbox.rs", note: "沙箱调试" },
+    { path: "codex-rs/diagnostics/src", note: "诊断数据", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- doctor 检查的项目清单
+- debug seatbelt / landlock：单独试沙箱
+- debug app-server：手工发协议消息
+- feedback：诊断报告怎么打包
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+想验证某个子系统能不能单独跑，先看 debug 子命令有没有现成的入口。

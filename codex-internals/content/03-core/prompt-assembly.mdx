@@ -1,0 +1,27 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/prompts", note: "内置提示词", dir: true },
+    { path: "codex-rs/core/src/agents_md_manager.rs", note: "AGENTS.md 的加载" },
+    { path: "codex-rs/core/src/prompt_debug.rs", note: "prompt 调试出口" },
+    { path: "docs/agents_md.md", note: "面向用户的说明" },
+  ]}
+/>
+
+## 学习提纲
+
+- 内置 prompts crate：基础指令
+- AGENTS.md 的发现与合并规则（agents_md_manager）
+- skills 注入的时机
+- 环境信息：cwd、git 状态、平台、沙箱模式
+- codex debug prompt-input：把最终结果打出来核对
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+想知道模型「为什么这么干」，先把 prompt-input 打出来看，别猜。

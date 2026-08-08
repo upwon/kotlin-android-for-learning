@@ -1,0 +1,25 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/sandboxing/src/seatbelt.rs", note: "策略组装" },
+    { path: "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl", note: "基础策略" },
+    { path: "codex-rs/sandboxing/src/seatbelt_network_policy.sbpl", note: "网络策略" },
+  ]}
+/>
+
+## 学习提纲
+
+- sandbox-exec 与 seatbelt 策略语言
+- seatbelt_base_policy.sbpl 逐条读
+- 网络策略单独一个文件的原因
+- 可写路径怎么注入到策略里
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+Seatbelt 策略是纯文本的，读一遍就知道 Codex 到底允许了什么。

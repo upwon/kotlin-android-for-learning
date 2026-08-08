@@ -1,0 +1,24 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/app-server/README.md", note: "协议一节，从「Protocol」读到「API Overview」" },
+    { path: "codex-rs/app-server-protocol/src/protocol", note: "请求 / 响应 / 通知的类型定义", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- MCP 能表达什么、不能表达什么
+- app-server 需要的三件 MCP 给不了的东西：反向请求、细粒度事件、有状态的 thread
+- 省掉 "jsonrpc":"2.0" 这一行的取舍
+- 协议演进的门：experimental 前缀与版本化
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+agent 前端要的是「双向、有状态、事件密集」，这正好是 MCP 的弱项。

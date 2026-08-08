@@ -1,0 +1,24 @@
+<SourceMap
+  entries={[
+    { path: "codex-rs/connectors/src", note: "connectors", dir: true },
+    { path: "codex-rs/core/src/apps", note: "apps", dir: true },
+    { path: "codex-rs/app-server/src/request_processors/apps_processor", note: "协议侧", dir: true },
+  ]}
+/>
+
+## 学习提纲
+
+- connectors 的抽象
+- apps：可被 turn 直接调用的应用
+- 与 MCP 的关系与区别
+
+<Callout type="note" title="这一章还是骨架">
+
+正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
+配合提纲自己读一遍，比等这里写完更快。
+
+</Callout>
+
+## 一句话结论
+
+connector 面向「数据源」，app 面向「可交互的东西」。
