@@ -1,21 +1,351 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.3 属性」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Kotlin 里**没有字段，只有属性**。`user.name` 看起来像访问字段，实际总是在调 getter。
+理解这一点能解释很多现象：为什么 `lateinit` 不能用于基本类型、
+为什么注解要写 `@get:` 前缀、为什么接口里的 `val` 可以没有值。
+
+## 1. 属性 = 幕后字段 + 访问器
+
+```kotlin
+class User(name: String) {
+    var name: String = name
+        get() = field.trim()                    // field 是幕后字段
+        set(value) {
+            field = value.ifBlank { "匿名" }
+        }
+}
+
+fun main() {
+    val u = User("  Summer  ")
+    println("[${u.name}]")
+    u.name = "   "
+    println(u.name)
+}
+```
+
+`field` 是编译器提供的**幕后字段** backing field，只能在访问器内部使用。
+
+<Callout type="warn" title="没用到 field 就不会生成幕后字段">
+
+```kotlin
+class Rect(val width: Int, val height: Int) {
+    // 计算属性：每次访问都算一遍，不占内存
+    val area: Int
+        get() = width * height
+
+    // 有初始值 → 有幕后字段
+    var cachedArea: Int = width * height
+}
+
+fun main() {
+    val r = Rect(3, 4)
+    println("${r.area} ${r.cachedArea}")
+}
+```
+
+规则：**访问器里用到了 `field`，或者属性有初始化器，才会生成幕后字段。**
+纯计算属性（只有 `get()`）不占任何内存，等价于一个无参方法。
+
 </Callout>
 
-## 学习提纲
+## 2. 访问器的可见性
 
-- 幕后字段 field 与自定义访问器
-- lateinit var：Android 里 View / 注入依赖的常用手段
-- 编译期常量 const val
-- 幕后属性模式（私有 MutableLiveData + 公开 LiveData）
+```kotlin
+class Counter {
+    var count: Int = 0
+        private set                 // 外部只读，内部可写
 
-## 与 Java / Android 的关键差异
+    fun increment() { count++ }
+}
 
-不再手写 getter/setter；Android 的 findViewById 场景常配 lateinit。
+fun main() {
+    val c = Counter()
+    c.increment()
+    c.increment()
+    println(c.count)
+    // c.count = 100    // ❌ setter 是 private 的
+}
+```
+
+`private set` 是 Kotlin 里非常常用的一个写法——它表达了「这个状态由我自己维护，
+你只能读」，比写一对 `getCount()` / 私有字段干净得多。
+
+## 3. lateinit
+
+```kotlin
+class Screen {
+    lateinit var title: String       // 承诺：用之前一定会赋值
+
+    fun init(t: String) { title = t }
+
+    fun render(): String =
+        if (::title.isInitialized) "标题：$title" else "尚未初始化"
+}
+
+fun main() {
+    val s = Screen()
+    println(s.render())
+    s.init("首页")
+    println(s.render())
+    println(s.title.length)          // 不需要 ?. 或 !!
+}
+```
+
+`lateinit` 的价值：让一个逻辑上「稍后才有值」的属性，在使用时是**非空类型**。
+
+<Callout type="warn" title="lateinit 的四条限制">
+
+1. 只能用于 `var`（`val` 必须在构造时确定）
+2. **不能用于基本类型**（`Int`、`Boolean`…）——因为它靠 null 表示「未初始化」，
+   而 primitive 没有 null。用 `Int` 的话改成 `by Delegates.notNull()`
+3. 不能有自定义访问器
+4. 类型必须非空
+
+访问未初始化的 `lateinit` 抛的是 `UninitializedPropertyAccessException`，
+不是 NPE——报错信息里会带属性名，比 NPE 好排查。
+
+</Callout>
+
+<Callout type="warn" title="别用 lateinit 逃避可空性">
+
+```kt
+// ❌ 这个值本来就可能不存在，用 lateinit 只是把编译期检查换成运行时崩溃
+lateinit var selectedItem: Item
+
+// ✅ 老实用可空类型
+var selectedItem: Item? = null
+```
+
+判断标准：**你能不能保证「用之前一定赋值」？** `onCreate` 里 findViewById 的 View、
+DI 注入的依赖——能保证，用 `lateinit`。用户可能没选中任何东西——不能保证，用可空类型。
+
+</Callout>
+
+## 4. const val
+
+```kotlin
+const val MAX_RETRY = 3              // 顶层，编译期常量
+
+object Config {
+    const val BASE_URL = "https://api.example.com"
+    val timeout = 5000L              // 不是 const，运行时初始化
+}
+
+fun main() {
+    println("$MAX_RETRY ${Config.BASE_URL} ${Config.timeout}")
+}
+```
+
+| | `const val` | `val` |
+| --- | --- | --- |
+| 求值时机 | 编译期 | 运行时 |
+| 位置 | 顶层 / `object` / `companion object` | 任意 |
+| 类型 | 基本类型和 `String` | 任意 |
+| 编译结果 | 调用处内联成字面量 | getter 调用 |
+| 能否用于注解参数 | 能 | 不能 |
+| 命名 | `MAX_RETRY` | `defaultTimeout` |
+
+<Callout type="tip">
+
+`const val` 在调用处被替换成字面量，所以**没有方法调用开销**，
+也是唯一能用在注解参数里的常量形式（比如 `@RequiresApi(MIN_SDK)`）。
+
+代价是：改了 `const val` 的值，所有引用它的模块都需要重新编译——
+跨模块的公开常量要留意这一点。
+
+</Callout>
+
+## 5. 幕后属性模式
+
+Android 上出镜率最高的属性写法：
+
+```kt
+class MyViewModel : ViewModel() {
+    // 私有可变
+    private val _uiState = MutableStateFlow(UiState())
+    // 公开只读
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private val _events = MutableSharedFlow<Event>()
+    val events: SharedFlow<Event> = _events.asSharedFlow()
+
+    fun update() {
+        _uiState.update { it.copy(isLoading = true) }
+    }
+}
+```
+
+外部只能收集，不能 `emit`——**可变性被封在类内部**。
+下划线前缀是官方规范认可的命名（这是极少数允许下划线开头的场景）。
+
+同样的模式用在集合上：
+
+```kotlin
+class Playlist {
+    private val _songs = mutableListOf<String>()
+    val songs: List<String> get() = _songs      // 暴露只读接口
+
+    fun add(song: String) { _songs += song }
+}
+
+fun main() {
+    val p = Playlist()
+    p.add("Song A")
+    p.add("Song B")
+    println(p.songs)
+    // p.songs.add("X")   // ❌ List 没有 add
+}
+```
+
+<Callout type="warn">
+
+注意上面用的是 `get() = _songs` 而不是 `val songs: List<String> = _songs`。
+后者虽然静态类型是 `List`，但**运行时仍是同一个可变对象**，
+调用方强转回 `MutableList` 就能改。想彻底隔离要 `get() = _songs.toList()`——
+代价是每次访问都复制一份。
+
+按需求选：内部用、只是防手滑，`get() = _songs` 就够；对外发布的库 API，用 `toList()`。
+
+</Callout>
+
+## 6. 注解的使用处目标
+
+因为一个属性会展开成**字段 + getter + setter**，注解必须说明加在谁身上：
+
+```kt
+class Dto(
+    @field:SerializedName("user_name")   // 加在字段上（Gson 要的）
+    val userName: String,
+
+    @get:JvmName("isActive")             // 加在 getter 上
+    val active: Boolean,
+
+    @param:NonNull                       // 加在构造函数参数上
+    val id: String,
+)
+```
+
+不写前缀时，注解会按 `param` → `property` → `field` 的顺序找第一个适用的目标。
+Gson / Moshi / Room 这类反射库通常需要 `@field:`，忘了写会出现「注解没生效」的诡异现象。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>val area: Int get() = width * height</code> 会占用内存吗？
+    </>
+  }
+  options={[
+    '会，每个属性都有幕后字段',
+    '不会，访问器里没用到 field 且没有初始化器，不生成幕后字段',
+    '会，但只占 4 字节',
+    '取决于是否是 data class',
+  ]}
+  answer={1}
+>
+
+不占。幕后字段只在两种情况下生成：**访问器里用到了 `field`**，
+或者**属性有初始化器**。
+
+纯计算属性（只有 `get()`，且不引用 `field`）编译后就是一个无参方法，
+每次访问都重新计算。
+
+这也带来一个取舍：计算成本高的属性反复访问会浪费 CPU，
+这时可以用 `by lazy` 缓存结果——见 [4.13 委托](/docs/04-classes/delegation)。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么 <code>lateinit var count: Int</code> 编译不过？
+    </>
+  }
+  options={[
+    'lateinit 只能用于 val',
+    'lateinit 靠 null 标记「未初始化」，而基本类型没有 null',
+    'Int 类型太小',
+    '需要先给个默认值',
+  ]}
+  answer={1}
+>
+
+`lateinit` 的实现方式是：字段初始为 `null`，访问时检查是不是 `null`，
+是就抛 `UninitializedPropertyAccessException`。
+
+而 `Int` 编译成 primitive `int`，没有 null 这个状态，无法区分「未初始化」和「值是 0」。
+
+需要延迟初始化一个 `Int` 时用：
+
+```
+var count: Int by Delegates.notNull()
+```
+
+`lateinit` 的其他限制：只能用于 `var`、不能有自定义访问器、类型必须非空。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      Gson 的 <code>@SerializedName</code> 加在 Kotlin 属性上没生效，最可能的原因？
+    </>
+  }
+  options={[
+    'Gson 不支持 Kotlin',
+    '注解需要作用在字段上，应该写 @field:SerializedName',
+    '属性必须是 var',
+    '需要加 @JvmField',
+  ]}
+  answer={1}
+>
+
+一个 Kotlin 属性会展开成**字段 + getter + setter（+ 构造函数参数）**，
+所以注解必须指明目标。
+
+不写前缀时，编译器按 `param` → `property` → `field` 的顺序选**第一个适用的**。
+对 data class 的主构造函数属性来说，`param` 通常就命中了——于是注解跑到了
+构造函数参数上，而 Gson 是**通过反射读字段**的，自然找不到。
+
+写 `@field:SerializedName("user_name")` 就对了。Moshi、Room 等反射库同理。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question={
+    <>
+      <code>private val _songs = mutableListOf&lt;String&gt;()</code> 配 <code>val songs: List&lt;String&gt; = _songs</code>，
+      外部真的改不了吗？
+    </>
+  }
+  options={[
+    '改不了，List 没有 add 方法',
+    '能改，运行时是同一个 MutableList 对象，强转回去就能改',
+    '改不了，Kotlin 会自动复制一份',
+    '取决于是否加了 @Immutable 注解',
+  ]}
+  answer={1}
+>
+
+**能改**。`List` 只是一个**只读视图接口**，不是不可变类型——运行时它和 `_songs`
+指向同一个 `ArrayList`，调用方 `(songs as MutableList).add(...)` 就绕过去了。
+
+两种更严的写法：
+
+- `val songs: List<String> get() = _songs` —— 仍是同一对象，但每次访问返回，
+  至少不会被缓存下来长期持有。防手滑够用。
+- `val songs: List<String> get() = _songs.toList()` —— 每次复制，彻底隔离。
+  对外发布的库 API 值得付这个代价。
+
+顺带一提，`MutableStateFlow` + `asStateFlow()` 的模式没有这个问题——
+`asStateFlow()` 返回的是真正的包装对象。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[properties](https://book.kotlincn.net/text/properties.html)
-- 官方英文：[properties](https://kotlinlang.org/docs/properties.html)
+- 官方英文：[properties](https://kotlinlang.org/docs/properties.html) ／ [annotations](https://kotlinlang.org/docs/annotations.html)

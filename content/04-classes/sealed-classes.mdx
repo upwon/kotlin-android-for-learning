@@ -1,20 +1,354 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.8 密封类与密封接口 sealed」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+如果只能从这个站里带走一个特性，我会选 `sealed`。它在 Android 上的价值不是「少写代码」，
+而是**把「漏处理某个状态」从运行时 bug 变成编译错误**。
+
+## 1. sealed 是什么
+
+**受限的继承层级**：子类集合在编译期是封闭、已知的。
+
+```kotlin
+sealed interface UiState {
+    data object Loading : UiState
+    data class Success(val items: List<String>) : UiState
+    data class Error(val message: String, val retryable: Boolean = true) : UiState
+}
+
+fun render(state: UiState): String = when (state) {
+    UiState.Loading -> "转圈中…"
+    is UiState.Success -> "拿到 ${state.items.size} 条"
+    is UiState.Error -> if (state.retryable) "失败，可重试：${state.message}" else "失败：${state.message}"
+    // 不需要 else —— 编译器知道所有分支都覆盖了
+}
+
+fun main() {
+    listOf(
+        UiState.Loading,
+        UiState.Success(listOf("a", "b")),
+        UiState.Error("网络超时"),
+        UiState.Error("账号被封", retryable = false),
+    ).forEach { println(render(it)) }
+}
+```
+
+## 2. 核心价值：穷尽性检查
+
+```kotlin
+sealed interface Payment {
+    data class Card(val last4: String) : Payment
+    data class Alipay(val account: String) : Payment
+}
+
+fun describe(p: Payment): String = when (p) {
+    is Payment.Card -> "银行卡 ****${p.last4}"
+    is Payment.Alipay -> "支付宝 ${p.account}"
+}
+
+fun main() = println(describe(Payment.Card("1234")))
+```
+
+现在假设产品说「要加微信支付」。你往 `Payment` 里加一个 `WeChat` 子类——
+**所有没覆盖它的 `when` 立刻编译报错**，编译器把需要改的地方全部列给你。
+
+<Callout type="success" title="这才是 sealed 的真正意义">
+
+对比一下两种建模方式在「新增一个状态」时的表现：
+
+| 建模方式 | 新增分支时 |
+| --- | --- |
+| `String` 常量 + `when` + `else` | 静默走 else，上线后才发现 |
+| `enum` + `when` | 编译报错 ✅ 但分支带不了数据 |
+| `sealed` + `when` | 编译报错 ✅ 且每个分支能带不同数据 |
+| 普通继承 + `is` 判断链 | 静默漏掉 |
+
+在一个持续演进的 Android 项目里，这个差别就是「重构有没有安全网」。
+
 </Callout>
 
-## 学习提纲
+<Callout type="warn" title="所以：sealed 的 when 千万别加 else">
 
-- sealed class / sealed interface 的限制范围
-- 与 when 配合的穷尽性检查
-- sealed 与 enum 的选择
-- Android 实战：用 sealed 建模 UiState（Loading/Success/Error）
-- 同一 package + module 的子类限制
+```kt
+// ❌ 加了 else 就放弃了整个安全网
+when (state) {
+    is Success -> ...
+    else -> {}          // 新增分支时静默落到这里
+}
+```
 
-## 与 Java / Android 的关键差异
+如果你只关心一两个分支，用 `if (state is Success)` 而不是带 `else` 的 `when`。
 
-比枚举更强：每个分支可以带不同的数据；新增分支时编译器会提醒所有 when。
+</Callout>
+
+## 3. sealed class 还是 sealed interface
+
+```kotlin
+// sealed interface：更灵活，子类可以实现多个接口
+sealed interface Result
+
+// sealed class：可以持有共享状态
+sealed class NetworkResult(val timestamp: Long) {
+    class Success(val body: String, timestamp: Long) : NetworkResult(timestamp)
+    class Failure(val code: Int, timestamp: Long) : NetworkResult(timestamp)
+}
+
+fun main() {
+    val r: NetworkResult = NetworkResult.Success("ok", 1000)
+    println("${r.timestamp} ${(r as NetworkResult.Success).body}")
+}
+```
+
+| | `sealed interface` | `sealed class` |
+| --- | --- | --- |
+| 共享状态 | ❌ 没有构造函数 | ✅ |
+| 子类可继承别的类 | ✅ | ❌（单继承） |
+| 一个类型属于多个 sealed 层级 | ✅ | ❌ |
+
+<Callout type="tip">
+
+**默认选 `sealed interface`。** 只有当所有子类真的共享同一份状态时才用 `sealed class`。
+
+接口更灵活的一个实际好处：一个 `data object` 可以同时属于两个 sealed 层级，
+比如 `Loading` 既是 `UiState` 又是 `Refreshable`。
+
+</Callout>
+
+## 4. 子类位置的限制
+
+子类必须和 sealed 声明在**同一个包、同一个编译模块**里（Kotlin 1.5+ 的规则，
+早期版本要求同一个文件）。
+
+```kt
+// 推荐写法：嵌套在里面，位置约束天然满足，命名也更清晰
+sealed interface UiState {
+    data object Loading : UiState
+    data class Success(val items: List<String>) : UiState
+}
+// 用起来：UiState.Loading、UiState.Success(...)
+```
+
+## 5. data object
+
+Kotlin 1.9 引入。没有状态的分支应该用 `data object` 而不是 `object`：
+
+```kotlin
+sealed interface Event {
+    data object Refresh : Event                // ✅ toString 是 "Refresh"
+    object BadRefresh : Event                  // 😐 toString 是 "Event$BadRefresh@1b6d3586"
+    data class Click(val id: Long) : Event
+}
+
+fun main() {
+    println(Event.Refresh)
+    println(Event.BadRefresh)
+    println(Event.Click(1))
+}
+```
+
+`data object` 会生成有意义的 `toString()`，并保证 `equals`/`hashCode` 行为一致。
+调试和日志时差别很明显。
+
+## 6. Android 实战
+
+**UI State 建模**（最经典的用法）：
+
+```kt
+sealed interface ProfileUiState {
+    data object Loading : ProfileUiState
+    data class Content(
+        val user: User,
+        val isRefreshing: Boolean = false,
+    ) : ProfileUiState
+    data class Error(val message: String) : ProfileUiState
+}
+
+class ProfileViewModel : ViewModel() {
+    private val _state = MutableStateFlow<ProfileUiState>(ProfileUiState.Loading)
+    val state: StateFlow<ProfileUiState> = _state.asStateFlow()
+}
+
+// Fragment 里
+private fun render(state: ProfileUiState) = when (state) {
+    ProfileUiState.Loading -> showLoading()
+    is ProfileUiState.Content -> showContent(state.user, state.isRefreshing)
+    is ProfileUiState.Error -> showError(state.message)
+}
+```
+
+**用户事件建模**（MVI）：
+
+```kt
+sealed interface LoginEvent {
+    data class UsernameChanged(val value: String) : LoginEvent
+    data class PasswordChanged(val value: String) : LoginEvent
+    data object Submit : LoginEvent
+    data object DismissError : LoginEvent
+}
+
+fun onEvent(event: LoginEvent) = when (event) {
+    is LoginEvent.UsernameChanged -> updateUsername(event.value)
+    is LoginEvent.PasswordChanged -> updatePassword(event.value)
+    LoginEvent.Submit -> submit()
+    LoginEvent.DismissError -> dismissError()
+}
+```
+
+**分层的错误类型**：
+
+```kt
+sealed interface AppError {
+    data class Network(val code: Int) : AppError
+    data object Unauthorized : AppError
+    data class Validation(val field: String, val reason: String) : AppError
+    data class Unknown(val cause: Throwable) : AppError
+}
+```
+
+比 `Result<T>` 强的地方：`Result` 只能带 `Throwable`，
+而错误的分类恰恰是需要 `when` 穷尽处理的。
+
+<Callout type="warn" title="不要把「布尔组合」建模成 sealed">
+
+```kt
+// ❌ 状态爆炸：加载中 + 有数据 + 正在刷新怎么表达？
+sealed interface State {
+    object Loading : State
+    object LoadingWithData : State
+    object Refreshing : State
+    object RefreshingWithError : State
+}
+
+// ✅ 正交的维度用 data class 的字段
+data class State(
+    val items: List<Item> = emptyList(),
+    val isLoading: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val error: String? = null,
+)
+```
+
+判断标准：这些状态是**互斥**的吗？互斥用 sealed，可以同时存在的用 data class 的字段。
+
+实践中常见的是混合：外层 sealed 区分几个真正互斥的大状态，
+`Content` 分支内部用字段表达正交维度。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question="sealed class 相比 enum 最主要的优势是什么？"
+  options={[
+    '性能更好',
+    '每个分支可以携带不同类型和数量的数据',
+    '可以有更多的实例',
+    '支持继承',
+  ]}
+  answer={1}
+>
+
+`enum` 的所有常量共享同一套字段结构，而 `sealed` 的每个子类可以有**完全不同的数据**：
+
+```
+sealed interface UiState {
+    data object Loading : UiState                        // 无数据
+    data class Success(val items: List<String>) : UiState  // 带列表
+    data class Error(val message: String) : UiState        // 带错误信息
+}
+```
+
+两者都有 `when` 穷尽性检查（这是它们相对字符串常量的共同优势），
+但只有 sealed 能让每个分支携带自己需要的上下文。
+
+选择依据：分支只是「标签」用 enum；分支需要携带数据用 sealed。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      给一个 sealed 层级新增子类后，已有的 <code>when</code> 表达式会怎样？
+    </>
+  }
+  options={[
+    '自动处理新分支',
+    '如果没有 else，会编译报错，逼你补上处理逻辑',
+    '运行时抛异常',
+    '静默忽略新分支',
+  ]}
+  answer={1}
+>
+
+**编译报错**——这正是 sealed 最大的价值。编译器会把所有需要更新的 `when`
+全部列出来，等于给你一份精确的 TODO 清单。
+
+反过来说，**给 sealed 的 when 加 `else` 就等于亲手拆掉这个安全网**：
+新增分支时会静默落进 `else`，可能表现为「新状态下界面一片空白」，
+而且只有跑到那个状态才会发现。
+
+只关心一两个分支时，用 `if (state is Success)` 而不是带 `else` 的 `when`。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      为什么推荐用 <code>data object</code> 而不是 <code>object</code> 作为无状态分支？
+    </>
+  }
+  options={[
+    'data object 性能更好',
+    'data object 会生成有意义的 toString()，调试和日志时可读',
+    'object 不能用在 sealed 层级里',
+    'data object 可以有状态',
+  ]}
+  answer={1}
+>
+
+`object Loading` 的 `toString()` 是默认的 `Event$Loading@1b6d3586`——
+日志里看到这个基本等于没信息。
+
+`data object Loading` 生成 `"Loading"`，同时保证 `equals`/`hashCode`
+的行为符合直觉（单例本来引用相等就够，但显式生成更一致）。
+
+在 MVI 架构里，state 和 event 都会被大量打日志，这个差别的体感很明显。
+Kotlin 1.9+ 一律用 `data object`。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些场景适合用 sealed？"
+  options={[
+    'UI 的加载中 / 成功 / 失败三种互斥状态',
+    '用户操作事件（点击、输入、提交）',
+    '一个页面同时具有的「正在加载」和「已有数据」两个正交维度',
+    '网络错误的细分类型（超时、401、解析失败）',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+A、B、D 的共同点是**分支互斥**且**每个分支携带不同数据**——这正是 sealed 的适用形状。
+
+**C 不适合**：「正在加载」和「已有数据」是**可以同时成立**的两个维度。
+硬用 sealed 会导致状态爆炸（`Loading`、`LoadingWithData`、`Refreshing`、
+`RefreshingWithError`…），组合数随维度指数增长。
+
+正交维度应该用 data class 的字段：
+
+```
+data class State(
+    val items: List<Item> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+)
+```
+
+实践中常见的是**混合**：外层 sealed 区分真正互斥的大状态，
+`Content` 分支内部再用字段表达正交维度。
+
+</Quiz>
 
 ## 官方参考
 

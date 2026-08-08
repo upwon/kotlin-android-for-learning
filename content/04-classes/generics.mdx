@@ -1,22 +1,387 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.9 泛型：in / out / where」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+泛型的基础规则和 Java 一样（都是擦除的），差异在两处：
+**型变从「每次使用时写通配符」挪到了「声明处写一次」**，以及 **`reified` 能在内联函数里拿回类型信息**。
+后者是 Java 完全没有的能力，Android 上很常用。
+
+## 1. 基础
+
+```kotlin
+class Box<T>(private val value: T) {
+    fun get(): T = value
+    fun <R> map(transform: (T) -> R): Box<R> = Box(transform(value))
+}
+
+fun <T> listOfNotNull(vararg items: T?): List<T> = items.filterNotNull()
+
+fun main() {
+    val box = Box(42)
+    println(box.get())
+    println(box.map { "值是 $it" }.get())
+    println(listOfNotNull(1, null, 3))
+}
+```
+
+## 2. 型变：声明处 vs 使用处
+
+先看问题：`List<String>` 能不能当 `List<Any>` 用？
+
+```kotlin
+fun printAll(items: List<Any>) = println(items)
+
+fun main() {
+    val strings: List<String> = listOf("a", "b")
+    printAll(strings)      // ✅ 可以！因为 List<out E>
+}
+```
+
+能，因为标准库把 `List` 声明成了 `List<out E>`。
+
+<Callout type="java" title="Java 需要每次使用时写通配符">
+
+```java
+// Java：每个方法签名都要重复写 ? extends
+void printAll(List<? extends Object> items) { }
+void addAll(List<? super String> target) { }
+```
+
+Kotlin 把这件事移到了**声明处**——`List` 定义时写一次 `out E`，
+所有使用点自动获得协变能力。这叫**声明处型变** declaration-site variance。
+
 </Callout>
 
-## 学习提纲
+## 3. out：协变（只产出）
 
-- 声明处型变 out（协变）/ in（逆变）
-- 与 Java `? extends` / `? super` 的对照
-- 类型投影与星投影 `*`
-- 泛型约束 where
-- reified 与 inline：绕过类型擦除（如 `startActivity<T>()`）
+```kotlin
+// out 表示 T 只出现在「产出」位置（返回值），不出现在「消费」位置（参数）
+interface Producer<out T> {
+    fun produce(): T
+    // fun consume(item: T)    // ❌ 编译错误：T 出现在 in 位置
+}
 
-## 与 Java / Android 的关键差异
+class StringProducer : Producer<String> {
+    override fun produce() = "hello"
+}
 
-型变从「每次使用都写通配符」变成「在声明处写一次」。
+fun main() {
+    val p: Producer<Any> = StringProducer()   // ✅ Producer<String> 是 Producer<Any> 的子类型
+    println(p.produce())
+}
+```
+
+记忆法：**`out` = 只出不进 = 生产者 = 协变**。
+`Producer<String>` 可以当 `Producer<Any>` 用——因为它产出的 String 一定也是 Any。
+
+对应 Java 的 `? extends T`。
+
+## 4. in：逆变（只消费）
+
+```kotlin
+interface Consumer<in T> {
+    fun consume(item: T)
+    // fun produce(): T        // ❌ T 不能出现在 out 位置
+}
+
+class AnyConsumer : Consumer<Any> {
+    override fun consume(item: Any) = println("消费 $item")
+}
+
+fun main() {
+    val c: Consumer<String> = AnyConsumer()   // ✅ Consumer<Any> 是 Consumer<String> 的子类型
+    c.consume("hello")
+}
+```
+
+记忆法：**`in` = 只进不出 = 消费者 = 逆变**。
+一个能处理任意 `Any` 的消费者，当然也能处理 `String`。
+
+对应 Java 的 `? super T`。
+
+<Callout type="tip" title="PECS 助记法在 Kotlin 里同样适用">
+
+**P**roducer **E**xtends, **C**onsumer **S**uper：
+
+| 意图 | Java | Kotlin |
+| --- | --- | --- |
+| 只从里面读 | `? extends T` | `out T` |
+| 只往里面写 | `? super T` | `in T` |
+| 又读又写 | `T` | `T`（不变） |
+
+标准库的例子：`List<out E>`（只读，协变）、`MutableList<E>`（可读可写，不变）、
+`Comparator<in T>`（只消费，逆变）。
+
+</Callout>
+
+## 5. 使用处型变（类型投影）
+
+有时类本身是不变的（因为它既读又写），但某个函数只用到其中一半能力：
+
+```kotlin
+// MutableList<E> 是不变的，但这个函数只从 from 里读
+fun copy(from: MutableList<out Any>, to: MutableList<Any>) {
+    for (item in from) to.add(item)
+}
+
+fun main() {
+    val strings = mutableListOf<String>("a", "b")
+    val anys = mutableListOf<Any>(1)
+    copy(strings, anys)      // ✅ 因为 from 是 out 投影
+    println(anys)
+}
+```
+
+`MutableList<out Any>` 就是**类型投影**——在这个位置上，编译器禁止调用
+以 `E` 为参数的方法（`add`、`set`），换取了协变能力。这等价于 Java 的 `? extends`。
+
+## 6. 星投影
+
+不关心具体类型参数时用 `*`：
+
+```kotlin
+fun printSize(list: List<*>) = println("大小 ${list.size}")
+
+fun main() {
+    printSize(listOf(1, 2, 3))
+    printSize(listOf("a"))
+
+    val any: Any = listOf(1, 2)
+    if (any is List<*>) {          // 运行时只能这样检查
+        println(any.firstOrNull())  // 元素类型是 Any?
+    }
+}
+```
+
+`List<*>` 相当于 `List<out Any?>`：能读（读出来是 `Any?`），不能写。
+
+## 7. 泛型约束
+
+```kotlin
+// 上界约束
+fun <T : Comparable<T>> maxOf(a: T, b: T): T = if (a > b) a else b
+
+// 多个约束用 where
+fun <T> copyWhenGreater(list: List<T>, threshold: T): List<String>
+    where T : CharSequence, T : Comparable<T> =
+    list.filter { it > threshold }.map { it.toString() }
+
+fun main() {
+    println(maxOf(3, 7))
+    println(maxOf("a", "b"))
+    println(copyWhenGreater(listOf("apple", "banana", "cherry"), "b"))
+}
+```
+
+不写约束时，默认上界是 `Any?`（**可空**）。需要非空要显式写 `T : Any`：
+
+```kotlin
+fun <T : Any> requireNotNullValue(value: T?): T = value ?: error("不能为空")
+
+fun main() = println(requireNotNullValue("hi"))
+```
+
+## 8. reified：拿回被擦除的类型
+
+这是 Android 上最实用的部分。
+
+```kotlin
+// 普通泛型函数：运行时不知道 T 是什么
+fun <T> filterByTypeBad(list: List<Any>): List<T> {
+    // return list.filter { it is T }   // ❌ Cannot check for instance of erased type
+    return emptyList()
+}
+
+// inline + reified：类型信息在编译期被内联进调用处
+inline fun <reified T> filterByType(list: List<Any>): List<T> =
+    list.filterIsInstance<T>()
+
+inline fun <reified T> Any.castOrNull(): T? = this as? T
+
+fun main() {
+    val mixed = listOf(1, "a", 2.0, "b", 3)
+    println(filterByType<String>(mixed))
+    println(filterByType<Int>(mixed))
+    println((42 as Any).castOrNull<String>())
+}
+```
+
+<Callout type="warn" title="reified 必须配 inline">
+
+`reified` 的原理是：`inline` 让函数体被复制到每个调用处，
+**在那里 `T` 已经是具体类型了**，编译器直接把 `T` 替换成实际类型。
+
+所以 `reified` 只能用在 `inline` 函数上，不能用于类的类型参数。
+
+</Callout>
+
+Android 上的经典应用：
+
+```kt
+// 消灭 Activity 跳转的样板
+inline fun <reified T : Activity> Context.start(noinline block: Intent.() -> Unit = {}) {
+    startActivity(Intent(this, T::class.java).apply(block))
+}
+// 用起来：context.start<DetailActivity> { putExtra("id", 1L) }
+
+// 类型安全的 Bundle 取值
+inline fun <reified T> Bundle.getOrNull(key: String): T? = get(key) as? T
+
+// Gson 解析
+inline fun <reified T> Gson.fromJson(json: String): T =
+    fromJson(json, object : TypeToken<T>() {}.type)
+
+// ViewModel 获取（androidx 就是这么实现的）
+inline fun <reified VM : ViewModel> Fragment.viewModel(): VM =
+    ViewModelProvider(this)[VM::class.java]
+```
+
+## 9. 泛型与可空性
+
+```kotlin
+class Container<T> {
+    // T 的默认上界是 Any?，所以 T 本身可能是可空类型
+    fun describe(value: T): String = value?.toString() ?: "null"
+}
+
+fun main() {
+    println(Container<String?>().describe(null))
+    println(Container<Int>().describe(42))
+}
+```
+
+<Callout type="warn">
+
+`T` 和 `T?` 的区别在泛型里容易搞混：
+
+- `fun <T> f(x: T)` —— `T` 可能已经是可空类型（`f<String?>(null)` 合法）
+- `fun <T : Any> f(x: T)` —— `T` 保证非空
+- `fun <T : Any> f(x: T?)` —— `T` 非空，但这个参数可以传 null
+
+写公开 API 时把这个约束想清楚，能省掉调用方很多困惑。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>out T</code> 和 <code>in T</code> 分别对应 Java 的什么？
+    </>
+  }
+  options={[
+    'out → ? super T，in → ? extends T',
+    'out → ? extends T，in → ? super T',
+    '都对应 ?',
+    'Kotlin 没有对应的 Java 写法',
+  ]}
+  answer={1}
+>
+
+`out T` → `? extends T`（协变，只读），`in T` → `? super T`（逆变，只写）。
+
+PECS 助记法在 Kotlin 里一样有效：**P**roducer **E**xtends（`out`），
+**C**onsumer **S**uper（`in`）。
+
+最大的差别是**位置**：Java 在每个使用点重复写通配符，Kotlin 在类声明时写一次
+（声明处型变），所有使用点自动获得。这就是为什么 Kotlin 里几乎看不到通配符——
+`List<out E>` 已经在标准库里声明好了。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么 <code>interface Producer&lt;out T&gt;</code> 里不能有 <code>fun consume(item: T)</code>？
+    </>
+  }
+  options={[
+    '语法限制，没有特别原因',
+    '因为 out 承诺了 T 只出现在产出位置；允许消费会破坏类型安全',
+    '因为 consume 没有返回值',
+    '其实可以，只是会有警告',
+  ]}
+  answer={1}
+>
+
+因为会破坏类型安全。假设允许：
+
+```
+val p: Producer<Any> = StringProducer()   // 协变，合法
+p.consume(42)                              // 往 StringProducer 里塞了 Int！
+```
+
+`out` 的语义是「我只产出 T，绝不消费 T」——正因为有这个承诺，
+编译器才敢让 `Producer<String>` 当 `Producer<Any>` 用。
+一旦有消费方法，这个承诺就不成立了。
+
+这和 Java 数组协变导致 `ArrayStoreException` 是同一类问题，
+只不过 Kotlin 在编译期就堵住了。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      为什么 <code>reified</code> 必须和 <code>inline</code> 一起用？
+    </>
+  }
+  options={[
+    '为了性能',
+    '因为 inline 把函数体复制到调用处，那里 T 已是具体类型，编译器才能把 T 替换成真实类型',
+    '因为 reified 是 inline 的简写',
+    '其实可以单独用 reified',
+  ]}
+  answer={1}
+>
+
+JVM 泛型是**擦除**的，运行时拿不到 `T`。
+
+`inline` 的机制是把函数体**复制到每一个调用处**。而在调用处，
+`filterByType<String>(list)` 里的 `T` 已经写死是 `String` 了——
+编译器就在那次展开中把所有 `T` 替换成 `String`。
+
+所以 `reified` 不是「运行时保留了类型」，而是「编译期在每个调用点各生成了一份特化代码」。
+
+推论：`reified` 不能用于类的类型参数（类没法内联），只能用于 `inline` 函数。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="fill"
+  question="写一个内联扩展函数，能这样调用：context.start<DetailActivity>()，用于启动 Activity。"
+  answer={[
+    'inline fun <reified T : Activity> Context.start() { startActivity(Intent(this, T::class.java)) }',
+    'inline fun <reified T : Activity> Context.start() = startActivity(Intent(this, T::class.java))',
+  ]}
+>
+
+关键是三件事凑齐：`inline` + `reified` + 扩展函数。
+
+```
+inline fun <reified T : Activity> Context.start() {
+    startActivity(Intent(this, T::class.java))
+}
+```
+
+因为 `T` 是 `reified` 的，`T::class.java` 才能写出来——普通泛型函数里
+这行会编译报错（类型已擦除）。
+
+加上默认参数还能更好用：
+
+```
+inline fun <reified T : Activity> Context.start(noinline block: Intent.() -> Unit = {}) {
+    startActivity(Intent(this, T::class.java).apply(block))
+}
+// context.start<DetailActivity> { putExtra("id", 1L) }
+```
+
+androidx 的 `by viewModels()` 用的就是同一套机制。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[generics](https://book.kotlincn.net/text/generics.html)
-- 官方英文：[generics](https://kotlinlang.org/docs/generics.html)
+- 官方英文：[generics](https://kotlinlang.org/docs/generics.html) ／ [inline-functions](https://kotlinlang.org/docs/inline-functions.html)

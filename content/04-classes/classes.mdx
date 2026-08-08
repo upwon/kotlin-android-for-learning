@@ -1,22 +1,384 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.1 类 & 构造函数」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Kotlin 的类声明和 Java 差别很大，但真正需要重新建立直觉的只有两点：
+**主构造函数把声明和赋值合并了**，以及**类默认是 final 的**。
+
+## 1. 主构造函数：一行顶一堆
+
+```kotlin
+// 主构造函数写在类名后面，val/var 让参数直接成为属性
+class User(val name: String, var age: Int)
+
+fun main() {
+    val u = User("Summer", 28)      // 没有 new
+    println("${u.name} ${u.age}")
+    u.age = 29
+    println(u.age)
+}
+```
+
+对照 Java 需要写的：字段声明、构造函数、getter、setter——四份重复。
+
+<Callout type="warn" title="val/var 决定了参数是不是属性">
+
+```kotlin
+class A(val x: Int)      // x 是属性，外部可以 a.x
+class B(x: Int) {        // x 只是构造函数参数，不是属性
+    val doubled = x * 2  // 只能在初始化时用
+}
+
+fun main() {
+    println(A(1).x)
+    println(B(1).doubled)
+    // println(B(1).x)   // ❌ 编译错误：x 不是属性
+}
+```
+
+不写 `val`/`var` 时，参数只在**初始化阶段**可见（init 块、属性初始化器里）。
+这其实很有用——传进来只是为了算点东西、不需要存下来的参数就该这么写。
+
 </Callout>
 
-## 学习提纲
+## 2. init 块与初始化顺序
 
-- 主构造函数：声明与赋值一步到位
-- init 块的执行顺序
-- 次构造函数与 this(...) 委托
-- 默认 final：类要显式 open 才能被继承
-- 创建实例不需要 new
+主构造函数不能写代码，逻辑放 `init` 块：
 
-## 与 Java / Android 的关键差异
+```kotlin
+class Rectangle(width: Int, height: Int) {
+    val area = width * height          // ① 属性初始化器
 
-类和方法默认 final，这与 Java 默认可继承正好相反。
+    init {                             // ② init 块
+        println("创建 ${width}x$height 的矩形")
+        require(width > 0 && height > 0) { "边长必须为正" }
+    }
+
+    val description = "面积 $area"      // ③ 按声明顺序执行
+
+    init {
+        println("描述：$description")
+    }
+}
+
+fun main() {
+    Rectangle(3, 4)
+}
+```
+
+<Callout type="warn" title="属性初始化器和 init 块按声明顺序交错执行">
+
+它们不是「先所有属性、再所有 init」，而是**从上到下依次执行**。所以下面这段会崩：
+
+```kt
+class Bad {
+    init {
+        println(name.length)    // ❌ NullPointerException：name 还没初始化
+    }
+    val name: String = "Kotlin"
+}
+```
+
+编译器对这种明显的情况会报错，但通过函数调用绕一层就检查不出来了。
+**养成习惯：属性声明在前，init 块在后。**
+
+</Callout>
+
+## 3. 次构造函数
+
+主构造函数满足不了时，用 `constructor` 声明次构造函数——它**必须**委托给主构造函数：
+
+```kotlin
+class Point(val x: Int, val y: Int) {
+    // this(...) 委托给主构造函数
+    constructor(value: Int) : this(value, value)
+
+    constructor() : this(0)
+
+    override fun toString() = "($x, $y)"
+}
+
+fun main() {
+    println(Point(1, 2))
+    println(Point(5))
+    println(Point())
+}
+```
+
+<Callout type="tip" title="大多数次构造函数可以用默认参数消掉">
+
+```kt
+// 😐 三个次构造函数
+class Point(val x: Int, val y: Int) {
+    constructor(v: Int) : this(v, v)
+    constructor() : this(0, 0)
+}
+
+// ✅ 默认参数
+class Point(val x: Int = 0, val y: Int = 0)
+```
+
+只有当「不同的构造方式需要不同的逻辑」时才真正需要次构造函数。
+纯粹是参数个数不同的话，默认参数更简洁——而且支持具名实参跳过中间参数。
+
+自定义 View 是个例外，它需要 `@JvmOverloads`，见
+[1.3 函数](/docs/01-basics/functions)。
+
+</Callout>
+
+`init` 块**先于**次构造函数体执行，因为它属于主构造函数：
+
+```kotlin
+class Demo(val a: Int) {
+    init { println("① init, a=$a") }
+    constructor() : this(42) {
+        println("② 次构造函数体")
+    }
+}
+
+fun main() { Demo() }
+```
+
+## 4. 默认 final —— 和 Java 相反
+
+```kotlin
+class Base {
+    fun render() = "base"           // 默认 final，不能被覆盖
+}
+
+open class OpenBase {               // 要显式 open 才能被继承
+    open fun render() = "open base" // 方法也要 open
+}
+
+class Child : OpenBase() {
+    override fun render() = "child" // override 是关键字，不是注解
+}
+
+fun main() {
+    println(Child().render())
+}
+```
+
+| | Java | Kotlin |
+| --- | --- | --- |
+| 类默认 | 可继承 | **final** |
+| 方法默认 | 可覆盖 | **final** |
+| 允许继承 | 默认就是 | 加 `open` |
+| 禁止继承 | 加 `final` | 默认就是 |
+| 覆盖标记 | `@Override` 注解（可省） | `override` 关键字（**必须**） |
+
+<Callout type="java" title="这是 Effective Java 的建议被写进了语言">
+
+「要么为继承而设计并提供文档，要么禁止继承」——Kotlin 把这条从建议变成了默认行为。
+
+好处是不会有人意外继承你的类然后依赖了内部实现细节。代价是在 Android 上会遇到一些摩擦：
+
+- **Mockito** 默认无法 mock final 类 → 用 `mockk`，或者启用
+  `mock-maker-inline`，或者面向接口编程
+- **一些库需要动态代理**（早期的 Room、Retrofit 的某些用法）→ 用
+  `all-open` 编译器插件针对特定注解自动开放
+
+Spring 项目常用 `all-open` 插件，Android 上遇到的情况少得多。
+
+</Callout>
+
+## 5. 类的成员
+
+```kotlin
+class Repository(private val cache: MutableMap<String, String> = mutableMapOf()) {
+
+    // 属性
+    var lastAccess: Long = 0
+        private set                    // 外部只读，内部可写
+
+    val size: Int
+        get() = cache.size             // 计算属性，没有幕后字段
+
+    // 方法
+    fun put(key: String, value: String) {
+        cache[key] = value
+        lastAccess = System.currentTimeMillis()
+    }
+
+    fun get(key: String): String? = cache[key]
+
+    // 嵌套类：默认是静态的（不持有外部引用）
+    class Config(val maxSize: Int = 100)
+
+    // 内部类：持有外部引用，需要 inner 关键字
+    inner class Stats {
+        fun describe() = "缓存了 $size 项"   // 可以访问外部的 size
+    }
+
+    companion object {
+        const val DEFAULT_KEY = "default"
+        fun create() = Repository()
+    }
+}
+
+fun main() {
+    val repo = Repository.create()
+    repo.put("a", "1")
+    println(repo.get("a"))
+    println(repo.size)
+    println(repo.Stats().describe())
+    println(Repository.DEFAULT_KEY)
+    println(Repository.Config().maxSize)
+}
+```
+
+<Callout type="warn" title="嵌套类默认是「静态」的——这和 Java 相反">
+
+Java 里 `class Inner {}` 默认持有外部类引用（非静态内部类），要写 `static class`
+才不持有。**Kotlin 正好反过来**：
+
+| | 持有外部引用？ | Kotlin | Java |
+| --- | --- | --- | --- |
+| 嵌套类 | 否 | `class Nested` | `static class Nested` |
+| 内部类 | 是 | `inner class Inner` | `class Inner` |
+
+这个默认值选得很好——Android 上「非静态内部类持有 Activity 引用导致内存泄漏」
+是最经典的泄漏原因之一，Kotlin 的默认行为直接规避了它。
+
+要写 `inner` 时先问自己一句：真的需要访问外部实例吗？
+
+</Callout>
+
+## 6. Android 场景
+
+```kt
+// data class 承载状态
+data class LoginUiState(
+    val username: String = "",
+    val isLoading: Boolean = false,
+    val error: String? = null,
+)
+
+// 构造函数注入（Hilt）
+@HiltViewModel
+class LoginViewModel @Inject constructor(
+    private val repository: AuthRepository,
+    private val savedStateHandle: SavedStateHandle,
+) : ViewModel() {
+
+    private val _state = MutableStateFlow(LoginUiState())
+    val state: StateFlow<LoginUiState> = _state.asStateFlow()   // 幕后属性模式
+}
+```
+
+注意 `@Inject constructor(...)` 这个写法——注解要加在 `constructor` 关键字上，
+所以这时不能省略 `constructor`。
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>class A(x: Int)</code> 和 <code>class B(val x: Int)</code> 有什么区别？
+    </>
+  }
+  options={[
+    '没有区别',
+    'A 的 x 只是构造函数参数，只在初始化阶段可见；B 的 x 是属性，外部可以访问',
+    'A 的 x 是私有的，B 的 x 是公开的',
+    'A 编译不过',
+  ]}
+  answer={1}
+>
+
+`val`/`var` 是「把这个参数变成属性」的开关。
+
+不写时，参数只在**初始化阶段**（`init` 块、属性初始化器）可见，方法体里和外部都访问不到。
+这不是缺陷而是特性——传进来只为了算点东西、不需要长期持有的参数就该这么写，
+能省下一个字段的内存。
+
+```
+class Rect(width: Int, height: Int) {
+    val area = width * height    // 只存 area，不存 width/height
+}
+```
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="Kotlin 的类默认是 final 的，这带来的最常见的实际摩擦是什么？"
+  options={[
+    '不能创建对象',
+    '默认无法被 Mockito 之类的库 mock，需要换 mockk 或启用 mock-maker-inline',
+    '不能实现接口',
+    '性能会变差',
+  ]}
+  answer={1}
+>
+
+「默认 final」把 Effective Java 的「要么为继承设计，要么禁止继承」写进了语言。
+
+Android 上最常见的摩擦就是**测试**：Mockito 默认基于子类代理，mock 不了 final 类。
+解决办法按推荐顺序：
+
+1. **面向接口编程**——本来就该 mock 接口而不是实现类
+2. 换 **mockk**，它原生支持 final
+3. 启用 Mockito 的 `mock-maker-inline`
+
+另一类摩擦是需要动态代理的库，可以用 `all-open` 编译器插件针对特定注解自动开放
+（Spring 项目常用，Android 上少见）。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="Kotlin 的 class Nested 和 inner class Inner 分别对应 Java 的什么？"
+  options={[
+    'Nested → class，Inner → static class',
+    'Nested → static class，Inner → class（持有外部引用）',
+    '两者都对应 static class',
+    'Kotlin 没有嵌套类的概念',
+  ]}
+  answer={1}
+>
+
+Kotlin 的默认值和 Java **正好相反**：
+
+| | 持有外部引用 | Kotlin | Java |
+| --- | --- | --- | --- |
+| 嵌套类 | 否 | `class Nested` | `static class Nested` |
+| 内部类 | 是 | `inner class Inner` | `class Inner` |
+
+Kotlin 的选择更安全。Android 上「非静态内部类（比如 Handler、AsyncTask）隐式持有
+Activity 引用，导致 Activity 无法回收」是最经典的内存泄漏来源，
+而 Kotlin 的默认行为直接规避了它——你必须显式写 `inner` 才会引入这个引用。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="属性初始化器和 init 块的执行顺序是？"
+  options={[
+    '先执行所有属性初始化器，再执行所有 init 块',
+    '先执行所有 init 块，再执行属性初始化器',
+    '按它们在类中出现的先后顺序，交错执行',
+    '顺序不确定',
+  ]}
+  answer={2}
+>
+
+**按声明的先后顺序，从上到下交错执行**。属性初始化器和 `init` 块在编译后
+被合并进同一个构造函数体。
+
+所以这段会在运行时炸：
+
+```
+class Bad {
+    init { println(name.length) }   // name 还没初始化
+    val name: String = "Kotlin"
+}
+```
+
+编译器对这种直白的情况会报错，但只要绕一层函数调用就检查不出来了。
+
+实践建议：**属性声明写在前面，init 块写在后面**，避开整个问题。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[classes](https://book.kotlincn.net/text/classes.html)
-- 官方英文：[classes](https://kotlinlang.org/docs/classes.html)
+- 官方英文：[classes](https://kotlinlang.org/docs/classes.html) ／ [nested-classes](https://kotlinlang.org/docs/nested-classes.html)

@@ -1,19 +1,274 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.5 可见性修饰符」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+四个修饰符里三个和 Java 差不多，真正的新东西是 **`internal`**——
+它对多 module 的 Android 工程价值很大，但被严重低估。
+
+## 1. 四种可见性
+
+| 修饰符 | 范围 | Java 对应 |
+| --- | --- | --- |
+| `public` | 任何地方（**默认值**） | `public` |
+| `internal` | **同一个模块内** | 无 |
+| `protected` | 类及其子类 | `protected`（少了包内可见） |
+| `private` | 类内 / 文件内 | `private` |
+
+```kotlin
+class Example {
+    val a = 1               // public，默认
+    internal val b = 2      // 模块内可见
+    protected open val c = 3   // 子类可见
+    private val d = 4       // 类内可见
+
+    fun show() = "$a $b $c $d"
+}
+
+fun main() {
+    println(Example().show())
+    println(Example().a)
+    // println(Example().d)   // ❌
+}
+```
+
+<Callout type="warn" title="默认是 public，不是 package-private">
+
+Java 不写修饰符 = package-private（包内可见）。**Kotlin 不写 = public。**
+
+从 Java 转过来最常见的疏忽就是：以为「不写就是内部的」，结果一堆本该私有的类
+变成了公开 API。写库的时候尤其危险。
+
 </Callout>
 
-## 学习提纲
+## 2. Kotlin 没有 package-private
 
-- 四种可见性：public / internal / protected / private
-- internal = 模块内可见，对应 Gradle module
-- 顶层声明的 private = 文件内可见
-- 没有 package-private
+包在 Kotlin 里**不是可见性边界**——它只是命名空间。
 
-## 与 Java / Android 的关键差异
+<Callout type="java">
 
-默认是 public 而不是 package-private；internal 很适合多 module 的 Android 工程。
+Java 的 package-private 有个根本缺陷：任何人只要在自己的工程里创建一个同名包，
+就能访问你的「包内」成员。它从来就不是真正的封装。
+
+Kotlin 用 `internal`（模块边界）替代了它。模块边界是编译单元的边界，
+外部代码无法伪造。
+
+</Callout>
+
+## 3. internal 与 Gradle module
+
+「模块」的定义是**一起编译的一组 Kotlin 文件**，在 Android 工程里就是一个 Gradle module：
+
+```
+:app
+:core:network       ← 一个模块
+:core:database      ← 另一个模块
+:feature:login
+```
+
+```kt
+// :core:network 模块内
+internal class OkHttpFactory { /* ... */ }       // 只有 :core:network 内部能用
+class NetworkClient { /* ... */ }                 // 其他模块也能用
+
+// :app 模块
+val client = NetworkClient()          // ✅
+val factory = OkHttpFactory()         // ❌ 编译错误
+```
+
+<Callout type="success" title="多 module 工程的实践：默认 internal">
+
+模块化的收益来自**明确的公开边界**。做法很简单：
+
+1. 每个模块只把真正的 API 标为 `public`
+2. **其余一律 `internal`**
+3. 这样重构内部实现时，编译器保证不会影响其他模块
+
+```kt
+// :core:network 的公开 API
+interface ApiService { suspend fun getUser(id: String): UserDto }
+class NetworkClient(...) { ... }
+
+// 实现细节，外部看不到也改不了
+internal class RetrofitApiService(...) : ApiService { ... }
+internal object JsonConfig { ... }
+internal fun Response.toResult(): Result<...> { ... }
+```
+
+不这么做的话，模块化只是把文件挪了个位置，耦合一点没减少。
+
+</Callout>
+
+## 4. internal 在字节码里的样子
+
+<Callout type="warn" title="Java 侧其实能访问 internal">
+
+`internal` 成员在字节码里是 **public** 的（因为 JVM 没有对应概念），
+只是名字被**混淆**了：
+
+```kt
+internal fun doWork() { }
+// 字节码里的方法名类似：doWork$module_name
+```
+
+后果：
+
+- **Kotlin 侧**：编译器强制检查，跨模块访问编译报错 ✅
+- **Java 侧**：能调到，但要写那个带后缀的丑名字 ⚠️
+
+所以 `internal` 是**给 Kotlin 用的约定**，不是 JVM 级别的强制。混合工程里
+如果 Java 代码硬要调，它拦不住——但也不会有人故意去写 `doWork$core_network`。
+
+顺带一提，这也是为什么 `internal` 成员不能出现在 `public` 声明的签名里
+（编译器会报 `public function exposes its internal parameter type`）。
+
+</Callout>
+
+## 5. 顶层声明的 private = 文件内可见
+
+```kt
+// File: Helper.kt
+private fun helper() = "只有 Helper.kt 里能调用"
+private const val SECRET = "同上"
+
+class Public {
+    fun use() = helper()      // ✅ 同一个文件
+}
+```
+
+这个特性配合「一个文件可以放多个类」很好用——把一组紧密相关的类放进同一个文件，
+用文件级 `private` 共享辅助函数，对外只暴露一个入口。
+
+## 6. protected 的差异
+
+Kotlin 的 `protected` = **类及其子类**，**不包括同包的其他类**（Java 包括）。
+
+```kotlin
+open class Base {
+    protected open val secret = 42
+}
+
+class Child : Base() {
+    fun reveal() = secret        // ✅ 子类可见
+}
+
+fun main() {
+    println(Child().reveal())
+    // println(Base().secret)    // ❌ 外部不可见，即使同包
+}
+```
+
+另外，**顶层声明不能用 `protected`**——它没有「类」这个上下文。
+
+## 7. 构造函数的可见性
+
+```kotlin
+class Singleton private constructor(val id: Int) {
+    companion object {
+        private var instance: Singleton? = null
+        fun getInstance(): Singleton =
+            instance ?: Singleton(1).also { instance = it }
+    }
+}
+
+fun main() {
+    println(Singleton.getInstance().id)
+    // Singleton(2)    // ❌ 构造函数私有
+}
+```
+
+注意语法：给构造函数加修饰符时，**`constructor` 关键字不能省**。
+
+## 练习
+
+<Quiz
+  index={1}
+  question="Kotlin 里不写可见性修饰符，默认是什么？"
+  options={[
+    'package-private，和 Java 一样',
+    'public',
+    'internal',
+    'private',
+  ]}
+  answer={1}
+>
+
+**public**。这和 Java 的 package-private 默认值不同，是从 Java 转过来最常见的疏忽——
+以为「不写就是内部的」，结果把一堆实现细节暴露成了公开 API。
+
+设计动机是：绝大多数声明本来就是要被使用的，让最常见的情况不需要写修饰符。
+
+代价就是你得主动为实现细节加 `private` / `internal`。写库或写多 module 工程时，
+养成「先想清楚这个该不该公开」的习惯。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="internal 的可见范围是什么？"
+  options={[
+    '同一个包内',
+    '同一个文件内',
+    '同一个模块内（Android 工程里就是一个 Gradle module）',
+    '同一个类及其子类',
+  ]}
+  answer={2}
+>
+
+**同一个模块内**。模块 = 一起编译的一组 Kotlin 文件，在 Android 工程里就是一个
+Gradle module（`:core:network`、`:feature:login` 等）。
+
+这是 Kotlin 相对 Java 新增的可见性级别，用来替代 Java 那个形同虚设的 package-private
+（任何人建个同名包就能访问）。模块边界是编译单元边界，外部伪造不了。
+
+多 module 工程的最佳实践：**只把真正的 API 标 public，其余一律 internal**。
+这样内部重构时编译器能保证不影响其他模块。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="internal 成员在 JVM 字节码里的可见性是什么？"
+  options={[
+    'private',
+    'protected',
+    'public，但方法名被加了模块名后缀',
+    'package-private',
+  ]}
+  answer={2}
+>
+
+**public，但名字被混淆**（类似 `doWork$core_network`）——因为 JVM 根本没有
+「模块可见性」这个概念。
+
+后果是：Kotlin 编译器会强制检查跨模块访问，但 **Java 代码理论上能调到**，
+只要它愿意写那个带后缀的丑名字。
+
+所以 `internal` 是「给 Kotlin 编译器执行的约定」而非 JVM 级强制。
+实践中足够用——没人会故意去写那种名字。
+
+这个实现方式也解释了另一条规则：`internal` 类型不能出现在 `public` 声明的签名里，
+否则外部拿到一个自己无法命名的类型。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="Kotlin 的 protected 和 Java 的 protected 有什么区别？"
+  options={[
+    'Kotlin 的不包括「同包的其他类」，Java 的包括',
+    'Kotlin 的 protected 不能用于顶层声明',
+    'Kotlin 的 protected 等同于 private',
+    'Kotlin 的 protected 成员在子类中默认还是 protected（可以改为 public）',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+- **A**：Java 的 `protected` 实际是「子类 + 同包」，Kotlin 收窄成了纯粹的「类及其子类」，
+  语义更干净。
+- **B**：`protected` 需要「类」这个上下文，顶层声明没有，所以只能用
+  `public` / `internal` / `private`。
+- **D**：覆盖时可见性默认保持，也可以放宽成 `public`，但不能收紧。
+
+**C 错**：`private` 是类内可见，子类都访问不到，两者差别很大。
+
+</Quiz>
 
 ## 官方参考
 

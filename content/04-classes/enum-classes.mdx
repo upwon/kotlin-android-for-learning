@@ -1,19 +1,320 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.10 枚举类」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+枚举和 Java 几乎一样，这一课主要讲三件事：`entries` 取代 `values()`、
+枚举与 sealed 的选择、以及 Android 上「枚举有内存开销」这个说法今天还成不成立。
+
+## 1. 基本用法
+
+```kotlin
+enum class Direction {
+    NORTH, SOUTH, EAST, WEST
+}
+
+fun main() {
+    val d = Direction.NORTH
+
+    println(d.name)          // NORTH
+    println(d.ordinal)       // 0
+    println(Direction.valueOf("SOUTH"))
+    println(Direction.entries)          // 所有常量
+
+    // when 对 enum 有穷尽性检查
+    val opposite = when (d) {
+        Direction.NORTH -> Direction.SOUTH
+        Direction.SOUTH -> Direction.NORTH
+        Direction.EAST -> Direction.WEST
+        Direction.WEST -> Direction.EAST
+    }
+    println(opposite)
+}
+```
+
+## 2. 带属性和方法的枚举
+
+```kotlin
+enum class HttpStatus(val code: Int, val isError: Boolean) {
+    OK(200, false),
+    NOT_FOUND(404, true),
+    SERVER_ERROR(500, true);          // ← 注意这个分号
+
+    fun describe(): String = "$name($code)${if (isError) " ⚠️" else ""}"
+
+    companion object {
+        fun fromCode(code: Int): HttpStatus? = entries.find { it.code == code }
+    }
+}
+
+fun main() {
+    HttpStatus.entries.forEach { println(it.describe()) }
+    println(HttpStatus.fromCode(404))
+    println(HttpStatus.fromCode(999))
+}
+```
+
+<Callout type="warn">
+
+常量列表后面如果还有其他成员，**必须用分号分隔**。这是 Kotlin 里极少数强制分号的地方。
+
 </Callout>
 
-## 学习提纲
+## 3. 每个常量有自己的实现
 
-- 枚举常量与匿名类体
-- 实现接口的枚举
-- entries 取代 values()
-- 枚举 vs sealed 的选择
+```kotlin
+enum class Operation {
+    PLUS {
+        override fun apply(a: Int, b: Int) = a + b
+    },
+    TIMES {
+        override fun apply(a: Int, b: Int) = a * b
+    };
 
-## 与 Java / Android 的关键差异
+    abstract fun apply(a: Int, b: Int): Int
+}
 
-和 Java 枚举很像；Android 上注意枚举的内存开销与 @IntDef 的取舍。
+fun main() {
+    Operation.entries.forEach { println("${it.name}: ${it.apply(3, 4)}") }
+}
+```
+
+枚举也可以实现接口：
+
+```kotlin
+interface Describable {
+    fun describe(): String
+}
+
+enum class Level(val value: Int) : Describable {
+    LOW(1), HIGH(10);
+    override fun describe() = "$name = $value"
+}
+
+fun main() = Level.entries.forEach { println(it.describe()) }
+```
+
+## 4. entries 取代 values()
+
+Kotlin 1.9 起，用 `entries` 而不是 `values()`：
+
+```kotlin
+enum class Color { RED, GREEN, BLUE }
+
+fun main() {
+    println(Color.entries)          // ✅ 返回 EntryList（不可变）
+    println(Color.values().toList())  // 😐 每次调用都复制一个新数组
+}
+```
+
+| | `values()` | `entries` |
+| --- | --- | --- |
+| 返回类型 | `Array<T>`（可变） | `EntryList<T>`（只读 List） |
+| 每次调用 | **复制一份新数组** | 返回同一个实例 |
+| 集合 API | 数组的那套 | List 的完整扩展函数 |
+
+<Callout type="tip">
+
+`values()` 每次调用都复制数组，是为了防止调用方修改（数组是可变的）。
+在 `onBindViewHolder` 之类的热路径上循环调用会有真实开销。
+
+`entries` 返回不可变 List，不需要防御性复制，而且能直接用
+`find`、`filter`、`associateBy` 等等。**新代码一律用 `entries`。**
+
+</Callout>
+
+## 5. 枚举 vs sealed
+
+```kotlin
+// 枚举：所有常量共享同一套字段结构
+enum class LoadState { LOADING, SUCCESS, ERROR }
+
+// sealed：每个分支可以带不同的数据
+sealed interface LoadResult {
+    data object Loading : LoadResult
+    data class Success(val items: List<String>) : LoadResult
+    data class Error(val message: String, val code: Int) : LoadResult
+}
+
+fun main() {
+    println(LoadState.entries)
+    println(LoadResult.Error("超时", 408))
+}
+```
+
+| | `enum` | `sealed` |
+| --- | --- | --- |
+| 实例数量 | 固定，每个常量一个单例 | 每个子类可以有任意多实例 |
+| 分支携带数据 | ❌ 所有常量字段结构相同 | ✅ 每个子类可以完全不同 |
+| `when` 穷尽性 | ✅ | ✅ |
+| 能否用于 `Bundle` / 数据库 | ✅ 有 `name`/`ordinal` 可序列化 | 需要自己处理 |
+| 能否遍历所有可能值 | ✅ `entries` | ❌ |
+
+<Callout type="success" title="选择依据">
+
+- **分支只是「标签」，不需要携带数据** → `enum`
+  （性别、排序方式、主题模式、日志级别）
+- **分支需要携带各自的数据** → `sealed`
+  （UI State、网络结果、用户事件）
+- **需要遍历所有可能值**（比如生成设置项列表）→ `enum`
+
+</Callout>
+
+## 6. Android 上的枚举开销
+
+<Callout type="warn" title="「Android 上别用 enum」这条建议已经过时了">
+
+这个说法来自 2010 年代早期的官方性能指南：一个枚举常量是一个对象，
+比 `static final int` 占更多内存和 dex 方法数，在 Dalvik + 16MB 堆的年代确实要紧。
+
+**今天的情况：**
+
+- ART 取代了 Dalvik，R8 会对未使用的枚举做优化，甚至能把只当常量用的枚举
+  转成 int（enum unboxing）
+- 现代设备的内存早已不是瓶颈
+- Google 自己的 Jetpack 库大量使用枚举
+
+**结论：正常用。** 只有在这两种情况下才考虑 `@IntDef` / `@StringDef`：
+
+1. 极端性能敏感的路径（每帧调用的绘制代码）
+2. 需要和 Java 的位运算 flag 互操作
+
+而且请注意：`@IntDef` 只有编译期检查，**没有 `when` 穷尽性**——
+用它换来的那点内存，代价是失去了新增分支时的编译期保护。多数情况下不划算。
+
+</Callout>
+
+## 7. 序列化与持久化
+
+```kotlin
+enum class Theme { LIGHT, DARK, SYSTEM }
+
+fun main() {
+    val theme = Theme.DARK
+
+    // ✅ 用 name 持久化：稳定，重排常量顺序不受影响
+    val saved = theme.name
+    println(saved)
+    println(Theme.valueOf(saved))
+
+    // ⚠️ 用 ordinal 持久化：调整常量顺序会导致旧数据错位
+    println(theme.ordinal)
+
+    // valueOf 找不到会抛异常，安全的写法：
+    fun parse(s: String): Theme = Theme.entries.find { it.name == s } ?: Theme.SYSTEM
+    println(parse("PURPLE"))
+}
+```
+
+<Callout type="warn" title="永远用 name 而不是 ordinal 做持久化">
+
+`ordinal` 是常量的声明顺序。有人某天在中间插了一个新常量，
+所有已存的数据全部错位——而且不会有任何报错。
+
+存到 SharedPreferences、数据库、网络请求里的枚举，一律用 `name`。
+读取时用容错的 `entries.find { }` 而不是会抛异常的 `valueOf()`。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      Kotlin 1.9 起为什么推荐用 <code>entries</code> 而不是 <code>values()</code>？
+    </>
+  }
+  options={[
+    'values() 已被删除',
+    'values() 每次调用都复制一个新数组；entries 返回不可变 List，无需防御性复制',
+    'entries 支持排序',
+    '没有区别，只是命名更好',
+  ]}
+  answer={1}
+>
+
+`values()` 返回 `Array`，而数组是**可变**的——为了防止调用方修改内部状态，
+它每次调用都必须**复制一份**。在循环里调用会产生真实的分配开销。
+
+`entries` 返回一个不可变的 `EntryList`，可以安全地返回同一个实例，
+而且能直接用 `find`、`filter`、`associateBy` 等 List 扩展函数。
+
+`values()` 没有被删除（Java 互操作还需要它），只是新代码不该再用。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="什么时候该用 sealed 而不是 enum？"
+  options={[
+    '任何时候，sealed 总是更好',
+    '当每个分支需要携带不同类型/数量的数据时',
+    '当分支超过 5 个时',
+    '当需要遍历所有可能值时',
+  ]}
+  answer={1}
+>
+
+分界线是**分支要不要带数据**：
+
+- `enum` 的所有常量共享同一套字段结构。适合「纯标签」——主题模式、排序方式、日志级别。
+- `sealed` 的每个子类可以有完全不同的数据。适合 UI State、网络结果、用户事件。
+
+**D 恰恰是 enum 的优势**：`entries` 能列出所有可能值（用来生成设置项列表之类），
+sealed 做不到这一点。
+
+enum 还有一个 sealed 没有的优势：`name` / `ordinal` 天然可序列化，
+存 SharedPreferences 和数据库很方便。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="把枚举值持久化到 SharedPreferences，应该存什么？"
+  options={[
+    'ordinal，因为是 int，更省空间',
+    'name，因为 ordinal 会随常量声明顺序变化',
+    'toString()，和 name 一样',
+    'hashCode()',
+  ]}
+  answer={1}
+>
+
+**存 `name`**。`ordinal` 是常量的**声明顺序**——某天有人在中间插入一个新常量，
+所有已存数据静默错位，而且不会有任何报错或崩溃，只会表现为「用户的设置莫名其妙变了」。
+
+读取时也要容错：`valueOf()` 遇到未知字符串会抛 `IllegalArgumentException`
+（比如降级安装了旧版本 App，读到新版本存的枚举名）。安全写法：
+
+```
+Theme.entries.find { it.name == saved } ?: Theme.SYSTEM
+```
+
+C 在默认情况下确实等于 `name`，但如果有人覆盖了 `toString()` 就不成立了，所以不该依赖。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="「Android 上应该用 @IntDef 代替 enum 以节省内存」这个说法，今天还成立吗？"
+  options={[
+    '完全成立，enum 开销很大',
+    '基本已经过时；ART + R8 优化后开销可忽略，且 @IntDef 没有 when 穷尽性检查',
+    '只在 Kotlin 里过时，Java 里仍然成立',
+    '取决于枚举常量的数量',
+  ]}
+  answer={1}
+>
+
+这条建议来自 Dalvik + 16MB 堆的年代。今天：
+
+- ART 取代 Dalvik，R8 能对枚举做优化（未使用的枚举被裁剪，纯常量枚举可被 unbox 成 int）
+- 内存早已不是普通 App 的瓶颈
+- Google 自己的 Jetpack 库大量使用枚举
+
+更重要的是**代价**：`@IntDef` 只有编译期的 lint 检查，
+**没有 `when` 穷尽性检查**——新增一个常量时，编译器不会提醒你去更新所有分支。
+用可维护性换那点内存，多数情况下不划算。
+
+仍然值得用 `@IntDef` 的场景：每帧执行的绘制代码，或者需要和 Java 的位运算 flag 互操作。
+
+</Quiz>
 
 ## 官方参考
 

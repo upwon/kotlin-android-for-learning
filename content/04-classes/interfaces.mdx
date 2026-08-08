@@ -1,21 +1,335 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.4 接口 & 函数式（SAM）接口」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+接口本身和 Java 8+ 差不多（都能有默认实现），差异在两处：
+**接口可以声明抽象属性**，以及 **SAM 转换只对 Java 接口自动生效，Kotlin 自己的接口要写 `fun interface`**。
+后者是从 Java 转过来最容易困惑的点。
+
+## 1. 接口可以有默认实现和属性
+
+```kotlin
+interface Clickable {
+    val label: String                    // 抽象属性，没有幕后字段
+
+    fun click(): String                  // 抽象方法
+
+    fun showTooltip(): String = "提示：$label"   // 默认实现
+}
+
+class Button(override val label: String) : Clickable {
+    override fun click() = "$label 被点击"
+}
+
+class Link : Clickable {
+    override val label: String get() = "链接"   // 用自定义 getter 实现
+    override fun click() = "跳转"
+}
+
+fun main() {
+    println(Button("提交").click())
+    println(Button("提交").showTooltip())
+    println(Link().showTooltip())
+}
+```
+
+<Callout type="warn" title="接口里的属性没有幕后字段">
+
+接口不能持有状态，所以 `val label: String` 只是声明了「实现者必须提供一个 label」。
+实现方式有两种：主构造函数里 `override val`，或者提供自定义 getter。
+
+```kt
+interface Named {
+    val name: String
+    // val name: String = "默认"   // ❌ 编译错误：接口属性不能有初始化器
+    val upper: String get() = name.uppercase()   // ✅ 有 getter 就行
+}
+```
+
 </Callout>
 
-## 学习提纲
+## 2. 多接口冲突
 
-- 接口可以有默认实现和抽象属性
-- 多接口默认实现冲突的解决
-- fun interface：Kotlin 侧的单抽象方法接口
-- SAM 转换：给 Java 接口传 lambda（如 OnClickListener）
+```kotlin
+interface A {
+    fun f() = "A.f"
+}
 
-## 与 Java / Android 的关键差异
+interface B {
+    fun f() = "B.f"
+}
 
-Java 接口能直接传 lambda，但 Kotlin 自己的接口需要声明 fun interface。
+class C : A, B {
+    // 两个接口都有默认实现，必须显式覆盖
+    override fun f() = "${super<A>.f()} + ${super<B>.f()}"
+}
+
+fun main() {
+    println(C().f())
+}
+```
+
+规则和 Java 一致：多个接口提供了同名默认实现时，实现类**必须**覆盖它，
+用 `super<接口名>.方法()` 指定调用哪个。
+
+## 3. fun interface 与 SAM 转换
+
+这是本课的重点。
+
+```kotlin
+// 普通接口：不能直接传 lambda
+interface Handler {
+    fun handle(event: String): String
+}
+
+// 函数式接口：可以传 lambda
+fun interface FunHandler {
+    fun handle(event: String): String
+}
+
+fun runWith(h: FunHandler) = h.handle("click")
+
+fun main() {
+    // 普通接口只能用对象表达式
+    val h1 = object : Handler {
+        override fun handle(event: String) = "处理 $event"
+    }
+    println(h1.handle("tap"))
+
+    // fun interface 可以直接传 lambda —— SAM 转换
+    println(runWith { event -> "lambda 处理 $event" })
+}
+```
+
+<Callout type="warn" title="Java 接口自动支持 SAM，Kotlin 接口不自动">
+
+这是最容易困惑的地方：
+
+```kt
+// ✅ 能用 lambda —— OnClickListener 是 Java 接口
+button.setOnClickListener { view -> doSomething() }
+
+// ❌ 假如 MyListener 是你写的 Kotlin 普通接口，这样会编译报错
+myView.setListener { doSomething() }
+```
+
+**为什么区别对待？** 因为 Kotlin 有函数类型（`(String) -> Unit`）这个更直接的表达方式。
+语言设计者认为：如果你只需要传一个函数，就该用函数类型；只有在确实需要一个
+「有名字的接口」时才用 `fun interface`。
+
+所以设计 API 时的选择顺序是：
+
+1. **优先用函数类型**：`fun setListener(onClick: (View) -> Unit)`
+2. **需要具名接口**（多个实现、要给 Java 用、参数含义需要文档化）→ `fun interface`
+3. **接口有多个方法** → 普通 `interface`
+
+</Callout>
+
+`fun interface` 的限制：**有且仅有一个抽象方法**（可以有多个非抽象成员）。
+
+```kotlin
+fun interface Validator {
+    fun validate(input: String): Boolean
+
+    // 非抽象成员不影响 SAM 转换
+    fun validateAll(inputs: List<String>) = inputs.all { validate(it) }
+}
+
+fun main() {
+    val notBlank = Validator { it.isNotBlank() }
+    println(notBlank.validate("hi"))
+    println(notBlank.validateAll(listOf("a", "b")))
+    println(notBlank.validateAll(listOf("a", "")))
+}
+```
+
+## 4. 函数类型 vs fun interface
+
+```kotlin
+// 方式 1：函数类型 —— 最轻量
+class Downloader1 {
+    var onProgress: ((Int) -> Unit)? = null
+    fun run() { onProgress?.invoke(50) }
+}
+
+// 方式 2：fun interface —— 有名字，参数含义更清楚
+fun interface ProgressListener {
+    fun onProgress(percent: Int)
+}
+
+class Downloader2 {
+    var listener: ProgressListener? = null
+    fun run() { listener?.onProgress(50) }
+}
+
+fun main() {
+    Downloader1().apply { onProgress = { println("方式1：$it%") } }.run()
+    Downloader2().apply { listener = ProgressListener { println("方式2：$it%") } }.run()
+}
+```
+
+| | 函数类型 | fun interface |
+| --- | --- | --- |
+| 调用方写 lambda | ✅ | ✅ |
+| 参数有名字（可读性） | ❌ 只有类型 | ✅ |
+| Java 侧调用友好 | 一般（`Function1`） | ✅ |
+| 多个回调方法 | 要写多个参数 | 用普通 interface |
+| 轻量程度 | 最轻 | 多一层接口 |
+
+<Callout type="tip">
+
+经验法则：**单个简单回调用函数类型，需要被 Java 调用或参数含义容易搞混时用 `fun interface`。**
+
+`(Int, Int) -> Unit` 这种两个同类型参数的回调，调用方很容易搞反顺序，
+换成 `fun interface` 让参数有名字是值得的。
+
+</Callout>
+
+## 5. Android 场景
+
+```kt
+// RecyclerView 的点击回调：函数类型足够
+class MyAdapter(
+    private val onItemClick: (Item) -> Unit,
+) : RecyclerView.Adapter<MyAdapter.VH>() { /* ... */ }
+
+adapter = MyAdapter { item -> navigateToDetail(item.id) }
+
+// 需要多个回调时，用接口比一堆函数类型参数清楚
+interface ItemActions {
+    fun onClick(item: Item)
+    fun onLongClick(item: Item): Boolean
+    fun onDelete(item: Item)
+}
+
+// 用接口做抽象边界（Clean Architecture）
+interface UserRepository {
+    suspend fun getUser(id: String): User
+    suspend fun updateUser(user: User)
+}
+```
+
+<Callout type="warn" title="接口默认方法与 Java 互操作">
+
+Kotlin 接口的默认实现，默认**不会**编译成 Java 8 的 `default` 方法，
+而是放在一个 `DefaultImpls` 静态内部类里——这是为了兼容旧的 Android API level。
+
+如果需要 Java 侧的实现类也能继承默认实现，加编译器参数：
+
+```
+-Xjvm-default=all
+```
+
+Android 上只有当你的 Kotlin 接口会被 Java 类实现时才需要关心这个。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      为什么 <code>button.setOnClickListener {'{'} ... {'}'}</code> 能传 lambda，
+      而自己写的 Kotlin 接口不行？
+    </>
+  }
+  options={[
+    '因为 OnClickListener 有 @FunctionalInterface 注解',
+    '因为 OnClickListener 是 Java 接口，Kotlin 对 Java 的单抽象方法接口自动做 SAM 转换；Kotlin 自己的接口要声明 fun interface',
+    '因为 setOnClickListener 是内联函数',
+    '因为 View 是 Java 类',
+  ]}
+  answer={1}
+>
+
+Kotlin 对 **Java** 的单抽象方法接口自动做 SAM 转换（这是互操作的必要妥协），
+但对 **Kotlin** 自己的接口不自动——必须显式声明 `fun interface`。
+
+设计动机是：Kotlin 已经有函数类型 `(View) -> Unit` 这个更直接的表达方式了。
+如果你只需要传一个函数，就该用函数类型；`fun interface` 留给
+「确实需要一个具名接口」的场景。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question="fun interface 的限制是什么？"
+  options={[
+    '不能有任何其他成员',
+    '有且仅有一个抽象方法，但可以有多个非抽象成员',
+    '不能继承其他接口',
+    '不能有泛型参数',
+  ]}
+  answer={1}
+>
+
+限制只有一条：**恰好一个抽象方法**。
+
+非抽象成员（有默认实现的方法、有 getter 的属性）想加多少都行，不影响 SAM 转换：
+
+```
+fun interface Validator {
+    fun validate(input: String): Boolean              // 唯一的抽象方法
+    fun validateAll(list: List<String>) = list.all { validate(it) }   // 可以有
+}
+```
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      接口里能写 <code>val name: String = "默认值"</code> 吗？
+    </>
+  }
+  options={[
+    '能，这是默认值',
+    '不能，接口属性没有幕后字段，不能有初始化器；但可以提供自定义 getter',
+    '能，但必须加 open',
+    '能，但只对 var 有效',
+  ]}
+  answer={1}
+>
+
+不能。接口**不能持有状态**，所以接口属性没有幕后字段，也就不能有初始化器。
+
+但可以提供**自定义 getter**，效果类似默认实现：
+
+```
+interface Named {
+    val name: String                              // 抽象，实现者提供
+    val upper: String get() = name.uppercase()    // ✅ 有默认「实现」
+}
+```
+
+实现方可以用主构造函数的 `override val name: String`，或者自己写 getter。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="设计一个只有单个回调的 API，什么时候该选 fun interface 而不是函数类型？"
+  options={[
+    '这个 API 会被 Java 代码调用',
+    '回调有多个同类型参数，容易搞反顺序，需要参数名来提示',
+    '任何情况下都该用 fun interface，更规范',
+    '需要给这个回调概念起一个有意义的名字',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+A、B、D 都是 `fun interface` 的正当理由：
+
+- **Java 互操作**：Java 侧看到 `Function1<View, Unit>` 很难受，具名接口友好得多。
+- **参数可读性**：`(Int, Int) -> Unit` 调用方根本不知道哪个是 width 哪个是 height，
+  `fun interface Resizer { fun onResize(width: Int, height: Int) }` 就清楚了。
+- **命名即文档**：`ProgressListener` 比 `(Int) -> Unit` 表达了更多意图。
+
+**C 错**：简单的单参数回调用函数类型更轻——少一层类型定义，调用方也更自由
+（可以传方法引用、可以组合）。默认应该是函数类型，有上述理由时才升级成 `fun interface`。
+
+</Quiz>
 
 ## 官方参考
 
-- 官方中文：[interfaces](https://book.kotlincn.net/text/interfaces.html)
-- 官方英文：[interfaces](https://kotlinlang.org/docs/interfaces.html)
+- 官方中文：[interfaces](https://book.kotlincn.net/text/interfaces.html) ／ [fun-interfaces](https://book.kotlincn.net/text/fun-interfaces.html)
+- 官方英文：[interfaces](https://kotlinlang.org/docs/interfaces.html) ／ [fun-interfaces](https://kotlinlang.org/docs/fun-interfaces.html)

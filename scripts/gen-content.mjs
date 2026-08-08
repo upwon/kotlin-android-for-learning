@@ -271,6 +271,7 @@ const parts = [
         ],
         javaNote: '类和方法默认 final，这与 Java 默认可继承正好相反。',
         official: 'classes',
+        deep: true,
       },
       {
         num: '4.2',
@@ -286,6 +287,7 @@ const parts = [
         ],
         javaNote: 'override 是关键字而非注解，忘写直接编译不过。',
         official: 'inheritance',
+        deep: true,
       },
       {
         num: '4.3',
@@ -300,6 +302,7 @@ const parts = [
         ],
         javaNote: '不再手写 getter/setter；Android 的 findViewById 场景常配 lateinit。',
         official: 'properties',
+        deep: true,
       },
       {
         num: '4.4',
@@ -314,6 +317,7 @@ const parts = [
         ],
         javaNote: 'Java 接口能直接传 lambda，但 Kotlin 自己的接口需要声明 fun interface。',
         official: 'interfaces',
+        deep: true,
       },
       {
         num: '4.5',
@@ -328,6 +332,7 @@ const parts = [
         ],
         javaNote: '默认是 public 而不是 package-private；internal 很适合多 module 的 Android 工程。',
         official: 'visibility-modifiers',
+        deep: true,
       },
       {
         num: '4.6',
@@ -343,6 +348,7 @@ const parts = [
         ],
         javaNote: 'Utils 静态方法的更好替代品；注意它是编译期静态分派。',
         official: 'extensions',
+        deep: true,
       },
       {
         num: '4.7',
@@ -358,6 +364,7 @@ const parts = [
         ],
         javaNote: '一行顶掉 Java 的 POJO + Lombok；但要清楚 copy() 是浅拷贝。',
         official: 'data-classes',
+        deep: true,
       },
       {
         num: '4.8',
@@ -373,6 +380,7 @@ const parts = [
         ],
         javaNote: '比枚举更强：每个分支可以带不同的数据；新增分支时编译器会提醒所有 when。',
         official: 'sealed-classes',
+        deep: true,
         star: true,
       },
       {
@@ -389,6 +397,7 @@ const parts = [
         ],
         javaNote: '型变从「每次使用都写通配符」变成「在声明处写一次」。',
         official: 'generics',
+        deep: true,
       },
       {
         num: '4.10',
@@ -398,6 +407,7 @@ const parts = [
         outline: ['枚举常量与匿名类体', '实现接口的枚举', 'entries 取代 values()', '枚举 vs sealed 的选择'],
         javaNote: '和 Java 枚举很像；Android 上注意枚举的内存开销与 @IntDef 的取舍。',
         official: 'enum-classes',
+        deep: true,
       },
       {
         num: '4.11',
@@ -412,6 +422,7 @@ const parts = [
         ],
         javaNote: '给基本类型套上语义又不付出对象开销，Java 没有对应物。',
         official: 'inline-classes',
+        deep: true,
       },
       {
         num: '4.12',
@@ -427,6 +438,7 @@ const parts = [
         ],
         javaNote: 'static 成员统一由 companion object 承担，必要时用 @JvmStatic 给 Java 侧用。',
         official: 'object-declarations',
+        deep: true,
       },
       {
         num: '4.13',
@@ -442,6 +454,7 @@ const parts = [
         ],
         javaNote: 'Android 里 by viewModels()、by lazy 极其常用，值得吃透其原理。',
         official: 'delegated-properties',
+        deep: true,
         star: true,
       },
     ],

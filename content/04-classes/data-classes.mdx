@@ -1,20 +1,337 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.7 数据类 data class」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+`data class` 一行顶掉 Java 的 POJO + Lombok。但它生成了什么、**没**生成什么，
+是必须搞清楚的——尤其是 `copy()` 的浅拷贝语义，和「只有主构造函数参数参与 equals」这条。
+
+## 1. 编译器生成了什么
+
+```kotlin
+data class User(val id: Long, val name: String, val age: Int)
+
+fun main() {
+    val a = User(1, "Summer", 28)
+    val b = User(1, "Summer", 28)
+
+    println(a)                      // toString：User(id=1, name=Summer, age=28)
+    println(a == b)                 // equals：true
+    println(a.hashCode() == b.hashCode())   // hashCode：true
+
+    val c = a.copy(age = 29)        // copy
+    println(c)
+
+    val (id, name, age) = a         // componentN → 解构
+    println("$id $name $age")
+}
+```
+
+五样东西：`equals()`、`hashCode()`、`toString()`、`copy()`、`componentN()`。
+
+`data class` 的要求：主构造函数至少一个参数，且**所有参数都必须是 `val` 或 `var`**。
+
+## 2. 只有主构造函数的参数参与
+
+这是最容易踩的坑：
+
+```kotlin
+data class Item(val id: Int) {
+    var quantity: Int = 0           // 类体里的属性，不参与 equals/hashCode/toString/copy
+}
+
+fun main() {
+    val a = Item(1).apply { quantity = 5 }
+    val b = Item(1).apply { quantity = 99 }
+
+    println(a == b)                 // true ⚠️ quantity 不同但相等
+    println(a)                      // Item(id=1) ⚠️ 看不到 quantity
+    println(a.copy().quantity)      // 0 ⚠️ copy 没带上 quantity
+}
+```
+
+<Callout type="warn">
+
+规则很硬：**只有主构造函数里声明的属性会被纳入生成的方法。**
+
+这会导致三个具体问题：`equals` 忽略了状态、`toString` 打印不全（调试时误导人）、
+`copy()` 丢数据。
+
+**结论：`data class` 的所有状态都应该放在主构造函数里。** 如果某个属性放不进去
+（比如它是计算出来的），先问问这个类是不是不该是 data class。
+
 </Callout>
 
-## 学习提纲
+## 3. copy() 是浅拷贝
 
-- 编译器生成了什么、没生成什么
-- copy() 与不可变数据建模
-- 解构声明与 componentN
-- 只有主构造函数参数参与 equals 的坑
-- 与 Parcelable（@Parcelize）配合
+```kotlin
+data class Team(val name: String, val members: MutableList<String>)
 
-## 与 Java / Android 的关键差异
+fun main() {
+    val a = Team("A组", mutableListOf("张三"))
+    val b = a.copy(name = "B组")
 
-一行顶掉 Java 的 POJO + Lombok；但要清楚 copy() 是浅拷贝。
+    b.members.add("李四")
+
+    println(a)      // Team(name=A组, members=[张三, 李四]) ⚠️ a 也变了
+    println(b)
+    println(a.members === b.members)   // true —— 同一个 list
+}
+```
+
+<Callout type="warn" title="copy 只复制引用，不复制对象">
+
+`copy()` 生成的是「新对象，字段逐个赋值」——引用类型字段复制的是**引用**。
+
+解法有两条，推荐第一条：
+
+```kotlin
+// ✅ 用不可变集合，从源头杜绝
+data class Team(val name: String, val members: List<String>)
+
+fun main() {
+    val a = Team("A组", listOf("张三"))
+    val b = a.copy(members = a.members + "李四")   // 生成新 list
+    println(a)
+    println(b)
+}
+```
+
+```kt
+// 或者需要可变时手动深拷贝
+val b = a.copy(members = a.members.toMutableList())
+```
+
+**data class 里放可变集合几乎总是设计问题。** 用 `List` 而不是 `MutableList`，
+需要「修改」时用 `+` / `filter` / `map` 生成新的。
+
+</Callout>
+
+## 4. 解构声明
+
+```kotlin
+data class Point(val x: Int, val y: Int)
+
+fun main() {
+    val p = Point(3, 4)
+    val (x, y) = p
+    println("$x, $y")
+
+    // 用下划线跳过不需要的
+    val (_, onlyY) = p
+    println(onlyY)
+
+    // 在 lambda 参数里解构
+    val points = listOf(Point(1, 2), Point(3, 4))
+    points.forEach { (a, b) -> print("[$a,$b] ") }
+    println()
+
+    // Map 遍历就是解构
+    mapOf("a" to 1).forEach { (k, v) -> println("$k=$v") }
+}
+```
+
+<Callout type="warn" title="解构是按位置的，不是按名字">
+
+```kt
+data class User(val name: String, val email: String)
+
+val (name, email) = user      // 正确
+
+// 某天有人调整了主构造函数的参数顺序：
+data class User(val email: String, val name: String)
+
+val (name, email) = user      // ⚠️ 静默地反了！编译通过，值互换
+```
+
+因为两个字段类型相同，编译器发现不了。这是 `data class` 唯一真正危险的地方。
+
+**建议：超过 2~3 个字段的 data class 不要用解构**，直接 `user.name` 更安全。
+调整主构造函数参数顺序时，全局搜一下解构用法。
+
+</Callout>
+
+## 5. 与 Java / Android 的配合
+
+**Parcelable**：
+
+```kt
+@Parcelize
+data class User(val id: Long, val name: String) : Parcelable
+```
+
+`kotlin-parcelize` 插件会自动生成 `writeToParcel` / `CREATOR`。
+
+**JSON**：
+
+```kt
+data class UserDto(
+    @field:SerializedName("user_id") val id: Long,
+    @field:SerializedName("user_name") val name: String,
+    val avatar: String? = null,        // 可空 + 默认值，容错更好
+)
+```
+
+注意 `@field:` 前缀（见 [4.3 属性](/docs/04-classes/properties)）。
+
+<Callout type="warn" title="反序列化会绕过默认值和非空检查">
+
+Gson 用反射直接写字段，**不走构造函数**。所以：
+
+```kt
+data class Config(val name: String, val timeout: Int = 5000)
+// JSON: {"name": "a"}   → timeout 是 0，不是 5000！
+// JSON: {}              → name 是 null，尽管类型声明是非空 String！
+```
+
+Gson 会给你一个「类型上不可能为 null，运行时却是 null」的对象，
+后面某个地方莫名其妙 NPE。
+
+解法：**用 Moshi 或 kotlinx.serialization**——它们是 Kotlin 感知的，
+会走构造函数、尊重默认值、校验非空。这是 Android 上应该迁移掉 Gson 的主要理由。
+
+</Callout>
+
+## 6. 什么时候不该用 data class
+
+<Callout type="tip">
+
+`data class` 表达的是**「一组值」**，不是「一个有身份的对象」。这些情况别用：
+
+- **有生命周期 / 身份的对象**：`ViewModel`、`Repository`、`Activity`——
+  它们不该有值相等语义
+- **需要继承层级**：`data class` 不能是 `open` 的
+- **只有行为没有状态**：用 `object` 或普通 class
+- **字段里有数组**：`equals` 会用数组的引用比较，两个内容相同的对象不相等（见
+  [2.3 数组](/docs/02-types/arrays)）
+
+反过来，这些场景非常合适：DTO、UI State、领域实体、事件、配置。
+
+</Callout>
+
+`data class` 不能被继承（隐式 final），也不能继承别的 data class。
+但**可以实现接口**，这正是 sealed 层级的常见写法：
+
+```kotlin
+sealed interface UiState {
+    data object Loading : UiState
+    data class Success(val items: List<String>) : UiState
+    data class Error(val message: String) : UiState
+}
+
+fun main() {
+    val states: List<UiState> = listOf(
+        UiState.Loading,
+        UiState.Success(listOf("a")),
+        UiState.Error("超时"),
+    )
+    states.forEach { println(it) }
+}
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>data class Item(val id: Int) {'{'} var quantity: Int = 0 {'}'}</code>
+      <br />
+      两个 id 相同但 quantity 不同的对象，<code>==</code> 结果是？
+    </>
+  }
+  options={['false', 'true', '编译错误', '取决于 quantity 的值']}
+  answer={1}
+>
+
+**true**。生成的 `equals` 只比较**主构造函数里声明的属性**，类体里的 `quantity`
+完全不参与。
+
+同样的规则也作用于 `hashCode()`、`toString()`（打印不出 quantity）和
+`copy()`（拷贝时丢掉 quantity，新对象是默认值 0）。
+
+这三个后果都很坑：相等性判断错误、调试时 `toString` 误导你、`copy` 静默丢数据。
+
+**结论：data class 的所有状态都必须放在主构造函数里。**
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>data class Team(val members: MutableList&lt;String&gt;)</code>，
+      <code>b = a.copy()</code> 之后 <code>b.members.add(...)</code> 会影响 a 吗？
+    </>
+  }
+  options={[
+    '不会，copy 是深拷贝',
+    '会，copy 是浅拷贝，两者共享同一个 list',
+    '不会，MutableList 会自动复制',
+    '编译错误',
+  ]}
+  answer={1}
+>
+
+**会**。`copy()` 是浅拷贝——新对象的字段逐个赋值，引用类型复制的是**引用**，
+所以 `a.members === b.members`。
+
+正确做法是从源头避免：**data class 里用 `List` 而不是 `MutableList`**，
+需要「修改」时生成新集合：
+
+```
+val b = a.copy(members = a.members + "李四")
+```
+
+这样 `a` 和 `b` 各自持有不同的不可变 list，`copy` 的浅拷贝语义就不再是问题。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="用 Gson 反序列化 data class 时，为什么默认值和非空类型可能失效？"
+  options={[
+    'Gson 有 bug',
+    'Gson 用反射直接写字段，不走构造函数，所以既不应用默认值也不做非空校验',
+    '因为 data class 是 final 的',
+    '需要给每个字段加 @SerializedName',
+  ]}
+  answer={1}
+>
+
+Gson 是为 Java 设计的，它通过 `Unsafe` 分配对象 + 反射写字段，
+**完全绕过构造函数**。于是：
+
+- 默认参数不会生效（那是构造函数的逻辑）→ 缺失字段得到 0 / null
+- 非空类型不会被校验 → 你会拿到一个 `name: String` 却是 null 的对象，
+  在后续某个毫不相关的地方 NPE
+
+解法是换 Kotlin 感知的库：**Moshi**（配 `KotlinJsonAdapterFactory` 或 codegen）
+或 **kotlinx.serialization**。两者都走构造函数、尊重默认值、校验可空性。
+
+这是 Android 项目应该迁移掉 Gson 的首要理由。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="哪些情况不适合用 data class？"
+  options={[
+    'ViewModel、Repository 这类有生命周期的对象',
+    '需要作为基类被继承的类',
+    '字段里包含数组的类',
+    'API 返回的 JSON 数据模型',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+- **A**：`data class` 意味着**值相等语义**，而 ViewModel、Repository 是有身份的对象——
+  两个字段相同的 Repository 不应该被认为「相等」。
+- **B**：`data class` 隐式 final，不能 `open`。（但**可以实现接口**，
+  这正是 sealed 层级里的标准写法。）
+- **C**：数组的 `equals` 是引用比较，生成的 `equals` 会让两个内容相同的对象不相等。
+  改用 `List`。
+
+**D 恰恰是最典型的适用场景**——DTO、UI State、领域实体、事件、配置，
+这些「一组值」正是 data class 存在的理由。
+
+</Quiz>
 
 ## 官方参考
 

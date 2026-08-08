@@ -1,20 +1,342 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.6 扩展（扩展函数 / 扩展属性）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+扩展函数是 Kotlin 最好用的特性之一，也是 Android 上出镜率最高的。
+但它有一个必须理解的本质：**扩展是静态分派的，不参与多态**。
+不知道这一点，迟早会写出「明明是子类却调用了父类的扩展」这种 bug。
+
+## 1. 基本用法
+
+```kotlin
+// 给你无权修改的类加方法
+fun String.isPhoneNumber(): Boolean =
+    length == 11 && startsWith("1") && all { it.isDigit() }
+
+fun Int.isEven(): Boolean = this % 2 == 0
+
+fun <T> List<T>.secondOrNull(): T? = getOrNull(1)
+
+fun main() {
+    println("13800138000".isPhoneNumber())
+    println(4.isEven())
+    println(listOf("a", "b", "c").secondOrNull())
+}
+```
+
+函数体里的 `this` 就是**接收者** receiver，可以省略（上面 `length` 就是 `this.length`）。
+
+## 2. 本质：带接收者参数的静态方法
+
+```kt
+// 你写的
+fun String.isPhoneNumber(): Boolean = ...
+
+// 编译后（大致）
+public static boolean isPhoneNumber(String $this) { ... }
+```
+
+<Callout type="java" title="它没有真的修改 String 类">
+
+扩展函数**不会**往 `String` 类里插入任何东西，也不能访问它的 `private` 成员。
+它就是一个静态工具方法，只是调用语法变成了 `receiver.method()`。
+
+所以从 Java 侧调用扩展函数长这样：
+
+```java
+StringExtKt.isPhoneNumber("13800138000");
+```
+
 </Callout>
 
-## 学习提纲
+由此推出三条重要限制。
 
-- 扩展函数的本质：静态方法 + 接收者参数
-- 静态解析：扩展不参与多态，不能覆盖成员函数
-- 扩展属性没有幕后字段
-- 可空接收者 `T?.` 扩展
-- Android 实战：View.dp、Context.toast、ViewGroup.inflate
+## 3. 限制一：不能覆盖成员函数
 
-## 与 Java / Android 的关键差异
+```kotlin
+class Repo {
+    fun load() = "成员函数"
+}
 
-Utils 静态方法的更好替代品；注意它是编译期静态分派。
+fun Repo.load() = "扩展函数"          // 编译能过，但永远不会被调用
+
+fun main() {
+    println(Repo().load())            // 成员函数 —— 成员总是优先
+}
+```
+
+<Callout type="warn">
+
+**成员函数永远优先于同签名的扩展函数。** IDE 会给一个
+`Extension is shadowed by a member` 警告。
+
+这个规则保护了库的作者：你给第三方类写的扩展，不会因为对方某天新增了同名方法而改变行为——
+只会静默失效。所以升级依赖后如果某个扩展「不生效了」，检查一下是不是被新的成员方法遮蔽了。
+
+</Callout>
+
+## 4. 限制二：静态分派，不是多态
+
+这是最重要的一条：
+
+```kotlin
+open class Animal
+class Dog : Animal()
+
+fun Animal.speak() = "动物叫"
+fun Dog.speak() = "汪汪"
+
+fun main() {
+    val d: Dog = Dog()
+    println(d.speak())            // 汪汪 —— 静态类型是 Dog
+
+    val a: Animal = Dog()         // 运行时是 Dog，但静态类型是 Animal
+    println(a.speak())            // 动物叫 ⚠️ 不是「汪汪」
+
+    // 对比成员函数（多态的）
+    println(listOf<Animal>(Dog()).map { it.speak() })   // [动物叫]
+}
+```
+
+<Callout type="warn" title="调用哪个扩展，由变量的「声明类型」决定">
+
+成员函数在**运行时**根据对象的实际类型分派（虚方法）；
+扩展函数在**编译期**根据表达式的静态类型分派。
+
+实际影响：把对象放进 `List<Animal>` 之后，对它们调用扩展函数，
+全都会走 `Animal` 的版本。
+
+**结论：需要多态行为的地方，用成员函数或接口，不要用扩展函数。**
+扩展适合的是「与具体类型绑定的、不需要被覆盖的工具方法」。
+
+</Callout>
+
+## 5. 限制三：不能访问 private 成员
+
+```kt
+class Account(private val balance: Int) {
+    fun show() = "余额 $balance"
+}
+
+fun Account.double(): Int = balance * 2    // ❌ 编译错误：balance 是私有的
+```
+
+扩展只能访问接收者的**公开 API**。想访问私有状态，要么写成员函数，
+要么把扩展定义在同一个文件里（文件内的 `private` 对同文件可见）。
+
+## 6. 扩展属性
+
+```kotlin
+val String.firstChar: Char?
+    get() = firstOrNull()
+
+val <T> List<T>.lastIndexOrNull: Int?
+    get() = if (isEmpty()) null else size - 1
+
+fun main() {
+    println("Kotlin".firstChar)
+    println("".firstChar)
+    println(listOf(1, 2, 3).lastIndexOrNull)
+}
+```
+
+<Callout type="warn">
+
+扩展属性**没有幕后字段**，所以必须提供 getter，不能有初始化器：
+
+```kt
+val String.cached: Int = 0      // ❌ 编译错误
+val String.length2: Int get() = length   // ✅
+```
+
+道理和接口属性一样——它没地方存这个值。
+
+</Callout>
+
+## 7. 可空接收者
+
+扩展可以定义在可空类型上，这样**不用先判空**就能调用：
+
+```kotlin
+fun String?.orPlaceholder(): String = this ?: "（空）"
+
+fun Any?.describe(): String = when (this) {
+    null -> "空值"
+    is String -> "字符串：$this"
+    else -> "其他：$this"
+}
+
+fun main() {
+    val s: String? = null
+    println(s.orPlaceholder())      // 直接调，不需要 s?.
+    println(s.describe())
+    println("hi".describe())
+}
+```
+
+标准库里的 `isNullOrEmpty()`、`isNullOrBlank()`、`orEmpty()` 就是这么实现的。
+
+## 8. Android 实战
+
+<Callout type="tip" title="这些扩展值得放进每个项目">
+
+```kt
+// 尺寸转换
+val Int.dp: Int get() = (this * Resources.getSystem().displayMetrics.density).toInt()
+val Int.sp: Float get() = this * Resources.getSystem().displayMetrics.scaledDensity
+
+// View 可见性
+fun View.show() { visibility = View.VISIBLE }
+fun View.hide() { visibility = View.GONE }
+fun View.showIf(condition: Boolean) { isVisible = condition }
+
+// Context
+fun Context.toast(msg: String, duration: Int = Toast.LENGTH_SHORT) {
+    Toast.makeText(this, msg, duration).show()
+}
+
+// ViewGroup inflate
+fun ViewGroup.inflate(@LayoutRes layoutRes: Int, attachToRoot: Boolean = false): View =
+    LayoutInflater.from(context).inflate(layoutRes, this, attachToRoot)
+
+// 防抖点击
+fun View.setOnSingleClickListener(interval: Long = 500L, action: (View) -> Unit) {
+    var lastTime = 0L
+    setOnClickListener {
+        val now = System.currentTimeMillis()
+        if (now - lastTime >= interval) {
+            lastTime = now
+            action(it)
+        }
+    }
+}
+```
+
+用起来：
+
+```kt
+binding.title.updateLayoutParams { topMargin = 16.dp }
+binding.error.showIf(state.hasError)
+context.toast("保存成功")
+binding.submit.setOnSingleClickListener { submit() }
+```
+
+</Callout>
+
+<Callout type="warn" title="别滥用">
+
+扩展函数很容易写上瘾，几条边界：
+
+- **不要给 `Any` 写扩展**——它会污染所有类型的补全列表
+- **不要用扩展做业务逻辑**——`User.calculateDiscount()` 这种应该是领域层的方法，
+  不是散落各处的扩展
+- **注意 import**——扩展函数需要 import 才能用，写在很偏的包里会让人找不到。
+  按用途建 `ViewExt.kt`、`ContextExt.kt` 这样的文件，放在明显的位置
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      定义了 <code>fun Animal.speak() = "动物叫"</code> 和 <code>fun Dog.speak() = "汪汪"</code>，
+      那么 <code>val a: Animal = Dog(); a.speak()</code> 输出什么？
+    </>
+  }
+  options={['汪汪', '动物叫', '编译错误', '运行时异常']}
+  answer={1}
+>
+
+`动物叫`。**扩展函数是静态分派的**——调用哪个版本，取决于表达式的**静态类型**
+（这里声明为 `Animal`），而不是对象的运行时类型。
+
+这和成员函数完全相反：成员函数是虚方法，运行时按实际类型分派。
+
+实际影响很大：把一堆 `Dog` 放进 `List<Animal>` 再 `map { it.speak() }`，
+拿到的全是「动物叫」。
+
+**结论：需要多态的地方用成员函数或接口，扩展只适合不需要被覆盖的工具方法。**
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      类里有成员函数 <code>load()</code>，又定义了同签名的扩展 <code>fun Repo.load()</code>，调用时走哪个？
+    </>
+  }
+  options={[
+    '扩展函数，因为它更「新」',
+    '成员函数，成员永远优先',
+    '编译错误，不允许同名',
+    '取决于 import 顺序',
+  ]}
+  answer={1}
+>
+
+**成员函数永远优先**。扩展函数只是编译不报错（IDE 会给
+`Extension is shadowed by a member` 警告），但永远不会被调用。
+
+这个规则保护了库的使用者：你给第三方类写的扩展，不会因为对方某天新增同名方法
+而**改变**程序行为，只会静默失效。
+
+实际提醒：升级依赖后发现某个扩展「不起作用了」，先检查是不是被新增的成员方法遮蔽了。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      为什么 <code>val String.cached: Int = 0</code> 编译不过？
+    </>
+  }
+  options={[
+    '扩展属性名不能叫 cached',
+    '扩展属性没有幕后字段，不能有初始化器，必须提供 getter',
+    '因为 String 是 final 类',
+    '因为缺少 override',
+  ]}
+  answer={1}
+>
+
+扩展并没有真的往 `String` 类里加东西——它编译成静态方法，**没地方存这个值**。
+所以扩展属性不能有初始化器，只能提供 getter（和可选的 setter）：
+
+```
+val String.firstChar: Char? get() = firstOrNull()
+```
+
+这和接口属性不能有初始化器是同一个道理：没有幕后字段。
+
+如果确实需要「给已有对象附加状态」，得用别的手段——比如一个
+`Map<Object, State>` 做外部关联，或者干脆用委托属性。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些是扩展函数的合理用法？"
+  options={[
+    'fun Context.toast(msg: String) 简化 Toast 调用',
+    'val Int.dp: Int 做尺寸转换',
+    'fun Any.log() 给所有类型加日志方法',
+    'fun String?.orPlaceholder() 处理可空接收者',
+  ]}
+  answer={[0, 1, 3]}
+>
+
+A、B、D 都是标准用法。特别是 **D**——可空接收者的扩展让调用方不用先判空，
+标准库的 `isNullOrEmpty()`、`orEmpty()` 就是这么设计的。
+
+**C 是反模式**：给 `Any` 写扩展会污染**所有类型**的自动补全列表，
+让 IDE 提示变得难用。而且它几乎必然是设计问题的信号——
+日志应该走专门的 Logger 抽象，而不是挂在 `Any` 上。
+
+其他要避免的：用扩展承载业务逻辑（那属于领域层的成员方法）、
+把扩展定义在很偏僻的包里导致别人找不到（按用途建 `ViewExt.kt` 这类文件）。
+
+</Quiz>
 
 ## 官方参考
 

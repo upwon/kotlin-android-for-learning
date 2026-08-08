@@ -1,20 +1,311 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.2 继承」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+继承本身和 Java 一致，差异集中在三处：**默认 final**、**`override` 是关键字**、
+以及**多接口冲突时的 `super<T>` 限定**。另外初始化顺序有个真实的坑，放在最后。
+
+## 1. Any：不是 Object
+
+所有类的根是 `Any`，但它比 `java.lang.Object` **小**：
+
+```kotlin
+fun main() {
+    val x: Any = "Kotlin"
+
+    println(x.toString())
+    println(x.hashCode())
+    println(x.equals("Kotlin"))
+
+    // Any 上没有 wait() / notify() / getClass()
+    // println(x.getClass())    // ❌ 用 javaClass 或 ::class
+    println(x.javaClass.simpleName)
+    println(x::class.simpleName)
+}
+```
+
+`Any` 只有 `equals`、`hashCode`、`toString` 三个成员。
+`wait()` / `notify()` 被拿掉了——它们属于旧的线程同步模型，Kotlin 不鼓励用。
+真需要时把对象转成 `Object` 再调。
+
+## 2. open / override
+
+```kotlin
+open class Shape(val name: String) {
+    open fun area(): Double = 0.0
+    open val description: String get() = "形状：$name"
+
+    fun render() = "$description，面积 ${area()}"   // final，不可覆盖
+}
+
+class Circle(private val radius: Double) : Shape("圆") {
+    override fun area(): Double = Math.PI * radius * radius
+    override val description: String get() = "半径 $radius 的${name}"
+}
+
+fun main() {
+    println(Circle(2.0).render())
+}
+```
+
+三条规则：
+
+- 类要 `open` 才能被继承，方法/属性要 `open` 才能被覆盖
+- `override` 是**关键字且必须写**（Java 的 `@Override` 是可省的注解）
+- **被 `override` 的成员自动是 `open` 的**——想在这一层封死要显式写 `final override`
+
+```kotlin
+open class A { open fun f() = "A" }
+open class B : A() { final override fun f() = "B" }   // C 不能再覆盖 f
+class C : B()
+
+fun main() { println(C().f()) }
+```
+
+## 3. 覆盖属性
+
+属性也能覆盖，而且 `val` 可以被 `var` 覆盖（反之不行）：
+
+```kotlin
+open class Base {
+    open val label: String = "base"
+}
+
+class Derived : Base() {
+    override var label: String = "derived"   // val → var 合法，加了 setter
+}
+
+fun main() {
+    val d = Derived()
+    println(d.label)
+    d.label = "changed"
+    println(d.label)
+}
+```
+
+反过来不行，因为 `var` 承诺了「可以写」，子类不能把这个能力收回去。
+
+## 4. super 与多接口冲突
+
+```kotlin
+open class Base {
+    open fun greet() = "来自 Base"
+}
+
+interface Greeter {
+    fun greet() = "来自 Greeter"      // 接口可以有默认实现
+}
+
+class Child : Base(), Greeter {
+    // 父类和接口都有 greet()，必须显式覆盖
+    override fun greet(): String {
+        return "${super<Base>.greet()} + ${super<Greeter>.greet()}"
+    }
+}
+
+fun main() {
+    println(Child().greet())
+}
+```
+
+`super<类型>.方法()` 用尖括号指定调哪一个。Java 里对应的写法是
+`Greeter.super.greet()`，Kotlin 换成了泛型式的语法。
+
+## 5. 初始化顺序的坑
+
+这是继承里最值得记住的一条：
+
+```kotlin
+open class Base {
+    open val size: Int = 10
+
+    init {
+        println("Base init: size = $size")   // ⚠️ 这里 size 还没被子类初始化
+    }
+}
+
+class Derived : Base() {
+    override val size: Int = 20
+
+    init {
+        println("Derived init: size = $size")
+    }
+}
+
+fun main() {
+    Derived()
+    println("最终 size = ${Derived().size}")
+}
+```
+
+输出是：
+
+```
+Base init: size = 0        ← 不是 10，也不是 20
+Derived init: size = 20
+```
+
+<Callout type="warn" title="为什么是 0">
+
+初始化顺序是：**先跑完父类的构造过程，再跑子类的**。
+
+而 `size` 被子类 `override` 了，所以 `Base.init` 里访问 `size` 实际调的是
+`Derived` 的 getter——但那时 `Derived` 的初始化还没开始，字段还是默认值 `0`。
+
+这个坑在 Java 里也存在（父类构造函数调用被覆盖的方法），只是 Kotlin 因为属性覆盖很常见，
+撞上的概率更高。
+
+**规则：不要在 `open class` 的构造函数、`init` 块、属性初始化器里使用 `open` 成员。**
+IDE 会给 `Accessing non-final property in constructor` 警告，别忽略它。
+
 </Callout>
 
-## 学习提纲
+真需要这种「子类提供值」的模式时，用 `by lazy` 推迟到第一次访问：
 
-- Any 与 java.lang.Object 的区别
-- open / override / final override
-- 覆盖属性
-- 派生类初始化顺序的陷阱
-- 接口冲突时的 `super<Base>.method()` 限定
+```kotlin
+open class Base {
+    open val size: Int = 10
+    val doubled: Int by lazy { size * 2 }   // 用的时候才算，那时子类已初始化完
+}
 
-## 与 Java / Android 的关键差异
+class Derived : Base() {
+    override val size: Int = 20
+}
 
-override 是关键字而非注解，忘写直接编译不过。
+fun main() {
+    println(Derived().doubled)   // 40 ✅
+}
+```
+
+## 6. Android：优先组合而非继承
+
+<Callout type="tip">
+
+Android 上真正需要继承的场景越来越少：
+
+```kt
+// 😐 用继承共享逻辑：层级一深就难维护
+abstract class BaseActivity : AppCompatActivity() {
+    protected fun showLoading() { /* ... */ }
+    protected fun showError(msg: String) { /* ... */ }
+}
+
+// ✅ 用扩展函数
+fun AppCompatActivity.showLoading() { /* ... */ }
+fun AppCompatActivity.showError(msg: String) { /* ... */ }
+
+// ✅ 用委托（见 4.13）
+class MainActivity : AppCompatActivity(), Logger by AndroidLogger()
+```
+
+`BaseActivity` / `BaseFragment` 这类「基类收纳一切」的模式，在项目变大后
+几乎必然演变成一个谁都不敢改的上帝类。扩展函数和委托在大多数情况下是更好的选择。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      父类 <code>init</code> 块里打印被子类 override 的属性 <code>size</code>（父类初始化为 10，子类为 20），输出是？
+    </>
+  }
+  options={['10', '20', '0（或该类型的默认值）', '编译错误']}
+  answer={2}
+>
+
+`0`。这是继承里最隐蔽的坑。
+
+执行顺序是「父类构造过程完整跑完 → 再跑子类」。父类 `init` 里访问 `size` 时，
+由于该属性被子类覆盖，实际调用的是**子类的 getter**——但子类的初始化还没开始，
+它的幕后字段还是默认值 0。
+
+规则：**不要在 `open class` 的构造函数、`init` 块或属性初始化器里访问 `open` 成员。**
+IDE 会给 `Accessing non-final property in constructor` 警告。
+
+确实需要「子类提供值」时，用 `by lazy` 把求值推迟到初始化完成之后。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      类同时继承 Base 类和实现 Greeter 接口，两者都有 <code>greet()</code>，怎么调用 Base 的版本？
+    </>
+  }
+  options={[
+    'super.greet()',
+    'Base.super.greet()',
+    'super<Base>.greet()',
+    'this.Base.greet()',
+  ]}
+  answer={2}
+>
+
+`super<Base>.greet()`。Kotlin 用尖括号指定要调哪个父类型的实现。
+
+Java 的对应写法是 `Base.super.greet()`——两者作用相同，只是语法不同。
+
+另外注意：当父类和接口有同名成员时，**编译器强制你显式覆盖**它，
+不允许含糊地继承其中一个。这比 Java 的规则更严格，也更安全。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      <code>open class B : A() {'{'} override fun f() {'}'}</code> 之后，B 的子类 C 还能覆盖 <code>f</code> 吗？
+    </>
+  }
+  options={[
+    '不能，override 的成员自动是 final 的',
+    '能，被 override 的成员自动是 open 的',
+    '要看 A 里 f 是怎么声明的',
+    '要给 f 再加一次 open 才行',
+  ]}
+  answer={1}
+>
+
+能。**被 `override` 的成员自动带有 `open` 语义**，不需要再写一次 `open`。
+
+想在某一层彻底封死继承链，要显式写 `final override`：
+
+```
+open class B : A() { final override fun f() = "B" }   // C 不能再覆盖
+```
+
+这个默认值是合理的：既然这个成员在层级里已经是可覆盖的，
+下一层通常也应该保持这个能力。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question={
+    <>
+      关于 <code>Any</code> 和 <code>java.lang.Object</code>，哪些说法正确？
+    </>
+  }
+  options={[
+    'Any 只声明了 equals、hashCode、toString',
+    'Any 上没有 wait() / notify()',
+    '取运行时类型要用 javaClass 或 ::class，不是 getClass()',
+    'Any 和 Object 完全等价，只是名字不同',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+A、B、C 都对。`Any` 是一个**更小**的根类型——只保留了三个真正通用的方法。
+
+`wait()` / `notify()` 被拿掉是有意的：它们属于旧的 monitor 同步模型，
+Kotlin 不鼓励使用（并发应该用协程或 `java.util.concurrent`）。
+真需要时可以 `(x as Object).wait()`。
+
+**D 错**：除了成员少之外，`Any` 在类型系统里的地位也不同——
+`Any` 是**非空**类型的根，可空类型的根是 `Any?`。Java 的 `Object` 没有这个区分。
+
+</Quiz>
 
 ## 官方参考
 

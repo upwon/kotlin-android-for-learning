@@ -1,22 +1,422 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 4.13 委托 & 属性委托（by lazy / observable）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+`by` 关键字做两件事：**类委托**（组合优于继承的语法糖）和**属性委托**
+（把 get/set 的逻辑外包出去）。后者是 Android 上的高频武器——`by lazy`、
+`by viewModels()`、`by viewBinding()` 全是它。
+
+## 1. 类委托
+
+```kotlin
+interface Repository {
+    fun load(id: Int): String
+    fun save(id: Int, value: String)
+}
+
+class RealRepository : Repository {
+    private val store = mutableMapOf<Int, String>()
+    override fun load(id: Int) = store[id] ?: "未找到"
+    override fun save(id: Int, value: String) { store[id] = value }
+}
+
+// by 把接口的所有方法自动转发给 delegate
+class LoggingRepository(
+    private val delegate: Repository,
+) : Repository by delegate {
+
+    // 只覆盖关心的方法，其余自动转发
+    override fun load(id: Int): String {
+        println("[LOG] 加载 $id")
+        return delegate.load(id)
+    }
+}
+
+fun main() {
+    val repo = LoggingRepository(RealRepository())
+    repo.save(1, "hello")        // 自动转发，没有日志
+    println(repo.load(1))        // 走了覆盖的版本
+}
+```
+
+<Callout type="java" title="Java 里要手写 N 个转发方法">
+
+装饰器模式在 Java 里的痛点就是：接口有 20 个方法，你只想改 1 个，
+却要手写 19 个 `return delegate.xxx()`。而且接口新增方法时全都要补。
+
+`by` 让编译器生成这些转发方法。
+
 </Callout>
 
-## 学习提纲
+<Callout type="warn" title="委托的对象不知道自己被包装了">
 
-- 类委托：组合优于继承的语法糖
-- 属性委托的约定（getValue/setValue）
-- by lazy 的三种线程安全模式
-- Delegates.observable / vetoable / notNull
-- Android 实战：by viewModels()、by viewBinding()
+```kotlin
+interface Base {
+    fun a(): String
+    fun b(): String
+}
 
-## 与 Java / Android 的关键差异
+class Impl : Base {
+    override fun a() = "Impl.a"
+    override fun b() = "b 调用了 ${a()}"    // ← 这里的 a() 是 Impl.a，不是覆盖后的
+}
 
-Android 里 by viewModels()、by lazy 极其常用，值得吃透其原理。
+class Wrapper(d: Base) : Base by d {
+    override fun a() = "Wrapper.a"
+}
+
+fun main() {
+    println(Wrapper(Impl()).a())   // Wrapper.a ✅
+    println(Wrapper(Impl()).b())   // b 调用了 Impl.a ⚠️ 不是 Wrapper.a
+}
+```
+
+这和继承的多态语义不同——`Impl` 内部调用 `a()` 时，它调的是自己的实现，
+完全不知道外面有个 `Wrapper` 覆盖了 `a()`。
+
+这其实是**组合的正确行为**（没有意外的耦合），但从继承的直觉过来会觉得奇怪。
+
+</Callout>
+
+## 2. 属性委托的约定
+
+```kotlin
+import kotlin.reflect.KProperty
+
+class UppercaseDelegate {
+    private var value: String = ""
+
+    operator fun getValue(thisRef: Any?, property: KProperty<*>): String = value
+
+    operator fun setValue(thisRef: Any?, property: KProperty<*>, newValue: String) {
+        println("给 ${property.name} 赋值 $newValue")
+        value = newValue.uppercase()
+    }
+}
+
+class User {
+    var name: String by UppercaseDelegate()
+}
+
+fun main() {
+    val u = User()
+    u.name = "summer"
+    println(u.name)
+}
+```
+
+约定很简单：
+
+- `val` 委托需要 `getValue(thisRef, property)`
+- `var` 委托还需要 `setValue(thisRef, property, value)`
+- 两者都要标 `operator`
+
+`property` 参数携带了属性的元信息（名字、类型），这是很多委托的关键——
+比如 SharedPreferences 委托可以用属性名当 key。
+
+## 3. by lazy
+
+最常用的委托：
+
+```kotlin
+class Config {
+    val expensive: String by lazy {
+        println("（只会计算一次）")
+        "计算结果"
+    }
+}
+
+fun main() {
+    val c = Config()
+    println("创建完成，还没访问")
+    println(c.expensive)
+    println(c.expensive)     // 第二次不再计算
+}
+```
+
+<Callout type="warn" title="三种线程安全模式">
+
+```kt
+// 默认：SYNCHRONIZED —— 加锁，保证只初始化一次
+val a by lazy { compute() }
+
+// PUBLICATION —— 可能多个线程同时计算，但只有第一个结果被采用
+val b by lazy(LazyThreadSafetyMode.PUBLICATION) { compute() }
+
+// NONE —— 不加锁，最快，但多线程访问结果未定义
+val c by lazy(LazyThreadSafetyMode.NONE) { compute() }
+```
+
+**Android 上如果确定只在主线程访问，用 `NONE` 能省掉锁开销**：
+
+```kt
+private val adapter by lazy(LazyThreadSafetyMode.NONE) { MyAdapter() }
+```
+
+View、Adapter、Presenter 这类只在主线程碰的东西都适用。
+但注意：**只要有一丝可能被后台线程访问，就老实用默认的 SYNCHRONIZED。**
+
+</Callout>
+
+`by lazy` 只能用于 `val`。需要延迟初始化的 `var` 用 `lateinit`（见
+[4.3 属性](/docs/04-classes/properties)）。
+
+## 4. Delegates 工具
+
+```kotlin
+import kotlin.properties.Delegates
+
+class Form {
+    // observable：值变化时回调
+    var username: String by Delegates.observable("") { prop, old, new ->
+        println("${prop.name}: '$old' → '$new'")
+    }
+
+    // vetoable：可以否决赋值
+    var age: Int by Delegates.vetoable(0) { _, _, new ->
+        new in 0..150      // 返回 false 则拒绝这次赋值
+    }
+
+    // notNull：lateinit 的基本类型替代品
+    var count: Int by Delegates.notNull()
+}
+
+fun main() {
+    val f = Form()
+    f.username = "summer"
+    f.username = "xia"
+
+    f.age = 28
+    println(f.age)
+    f.age = 999            // 被否决
+    println(f.age)
+
+    println(runCatching { f.count }.exceptionOrNull()?.javaClass?.simpleName)
+    f.count = 5
+    println(f.count)
+}
+```
+
+## 5. 委托给 Map
+
+```kotlin
+class Settings(private val map: Map<String, Any?>) {
+    val theme: String by map
+    val fontSize: Int by map
+}
+
+fun main() {
+    val s = Settings(mapOf("theme" to "dark", "fontSize" to 16))
+    println("${s.theme} ${s.fontSize}")
+}
+```
+
+属性名自动成为 map 的 key。解析动态 JSON 时偶尔有用。
+
+## 6. Android 实战
+
+<Callout type="tip" title="这些委托你每天都在用">
+
+```kt
+class MyFragment : Fragment(R.layout.fragment_my) {
+    // ViewModel：作用域绑定到 Fragment
+    private val viewModel: MyViewModel by viewModels()
+    // 或者绑定到宿主 Activity
+    private val sharedViewModel: SharedViewModel by activityViewModels()
+
+    // 导航参数
+    private val args: MyFragmentArgs by navArgs()
+
+    // ViewBinding（第三方库 viewbindingpropertydelegate）
+    private val binding by viewBinding(FragmentMyBinding::bind)
+}
+```
+
+它们全都是属性委托——`by viewModels()` 返回一个 `Lazy<VM>`，
+在第一次访问时通过 `ViewModelProvider` 取实例。
+
+</Callout>
+
+**自己写一个 SharedPreferences 委托**：
+
+```kt
+class PreferenceDelegate<T>(
+    private val prefs: SharedPreferences,
+    private val defaultValue: T,
+    private val key: String? = null,
+) : ReadWriteProperty<Any?, T> {
+
+    @Suppress("UNCHECKED_CAST")
+    override fun getValue(thisRef: Any?, property: KProperty<*>): T {
+        val k = key ?: property.name          // 属性名当 key
+        return when (defaultValue) {
+            is String -> prefs.getString(k, defaultValue) as T
+            is Int -> prefs.getInt(k, defaultValue) as T
+            is Boolean -> prefs.getBoolean(k, defaultValue) as T
+            is Long -> prefs.getLong(k, defaultValue) as T
+            else -> error("不支持的类型")
+        }
+    }
+
+    override fun setValue(thisRef: Any?, property: KProperty<*>, value: T) {
+        val k = key ?: property.name
+        prefs.edit {
+            when (value) {
+                is String -> putString(k, value)
+                is Int -> putInt(k, value)
+                is Boolean -> putBoolean(k, value)
+                is Long -> putLong(k, value)
+                else -> error("不支持的类型")
+            }
+        }
+    }
+}
+
+// 用起来：读写就像普通属性
+class UserPrefs(prefs: SharedPreferences) {
+    var isFirstLaunch by PreferenceDelegate(prefs, true)
+    var userName by PreferenceDelegate(prefs, "")
+    var loginCount by PreferenceDelegate(prefs, 0)
+}
+
+// prefs.isFirstLaunch = false
+// if (prefs.isFirstLaunch) { ... }
+```
+
+<Callout type="warn">
+
+注意这个委托里 `getValue` 每次都读一次 SharedPreferences。
+真实项目里如果读得很频繁，应该加内存缓存，或者直接用
+**DataStore**——它原生就是基于 Flow 的异步 API，不会阻塞主线程。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>class Wrapper(d: Base) : Base by d</code>，Wrapper 覆盖了 <code>a()</code>。
+      如果 Base 的实现类内部 <code>b()</code> 调用了 <code>a()</code>，调的是谁的？
+    </>
+  }
+  options={[
+    'Wrapper 的 a()',
+    '实现类自己的 a()',
+    '编译错误',
+    '取决于调用顺序',
+  ]}
+  answer={1}
+>
+
+**实现类自己的 `a()`**。委托是**组合**不是继承——被委托的对象完全不知道
+外面有个 Wrapper，它内部的自调用走的是自己的实现。
+
+这和继承的多态语义正相反：如果 `Wrapper` 是继承 `Impl` 并覆盖 `a()`，
+那么 `b()` 里的 `a()` 会走覆盖后的版本。
+
+从继承的直觉过来会觉得反常，但这其实是组合的**正确**行为——
+它避免了「基类调用被子类覆盖的方法」这类脆弱基类问题。
+需要真正的多态时，用继承或者把 `a()` 作为参数传进去。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      Android 上只在主线程访问的属性，用 <code>by lazy</code> 时推荐哪种模式？
+    </>
+  }
+  options={[
+    '默认的 SYNCHRONIZED',
+    'LazyThreadSafetyMode.NONE，省掉加锁开销',
+    'LazyThreadSafetyMode.PUBLICATION',
+    'lazy 不支持指定模式',
+  ]}
+  answer={1}
+>
+
+`LazyThreadSafetyMode.NONE`——不加锁，最快。
+
+```
+private val adapter by lazy(LazyThreadSafetyMode.NONE) { MyAdapter() }
+```
+
+Adapter、View 引用、Presenter 这类只在主线程碰的对象都适用。
+
+三种模式的区别：
+
+- **SYNCHRONIZED**（默认）：加锁，保证只初始化一次
+- **PUBLICATION**：多线程可能同时计算，但只有第一个完成的结果被采用
+- **NONE**：不加锁，多线程访问时行为未定义
+
+判断标准很硬：**只要有一丝可能被后台线程访问，就用默认的 SYNCHRONIZED。**
+省这点锁开销不值得换一个偶发的竞态 bug。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      自定义属性委托时，<code>getValue</code> 的第二个参数 <code>property: KProperty&lt;*&gt;</code> 有什么用？
+    </>
+  }
+  options={[
+    '没什么用，是固定签名要求',
+    '携带属性的元信息（如 name），可以用属性名做 key 等',
+    '用来做类型检查',
+    '用来判断是 val 还是 var',
+  ]}
+  answer={1}
+>
+
+它携带属性的元信息，最常用的是 `property.name`。
+
+SharedPreferences 委托就是典型：用属性名直接当存储的 key，
+调用方连 key 都不用写。
+
+```
+var userName by PreferenceDelegate(prefs, "")   // key 自动就是 "userName"
+```
+
+另一个常见用途是在 `observable` 类委托里打日志，报告是哪个属性变了。
+
+第一个参数 `thisRef` 是持有该属性的对象，需要访问宿主状态时用得上
+（比如从 `thisRef` 里拿 Context）。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question={
+    <>
+      关于 <code>by lazy</code> 和 <code>lateinit</code>，哪些说法正确？
+    </>
+  }
+  options={[
+    'by lazy 只能用于 val，lateinit 只能用于 var',
+    'by lazy 的初始化逻辑写在声明处，lateinit 需要外部赋值',
+    'lateinit 不能用于基本类型，by lazy 可以',
+    '两者都是属性委托',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+A、B、C 都对，它们的适用场景其实很好区分：
+
+- **`by lazy`**：值能由自己算出来，只是想推迟到第一次访问。
+- **`lateinit`**：值必须由外部注入（`onCreate` 里 findViewById、DI 框架赋值）。
+
+**D 错**：只有 `by lazy` 是属性委托（`lazy()` 返回一个 `Lazy<T>` 对象）。
+`lateinit` 是**编译器特性**——它直接生成一个带 null 检查的字段，
+没有委托对象，所以也没有委托的额外开销。
+
+这也解释了 C：`lateinit` 靠 null 表示「未初始化」，而 primitive 没有 null。
+需要延迟初始化的 `Int` 用 `Delegates.notNull()`。
+
+</Quiz>
 
 ## 官方参考
 
-- 官方中文：[delegated-properties](https://book.kotlincn.net/text/delegated-properties.html)
-- 官方英文：[delegated-properties](https://kotlinlang.org/docs/delegated-properties.html)
+- 官方中文：[delegation](https://book.kotlincn.net/text/delegation.html) ／ [delegated-properties](https://book.kotlincn.net/text/delegated-properties.html)
+- 官方英文：[delegation](https://kotlinlang.org/docs/delegation.html) ／ [delegated-properties](https://kotlinlang.org/docs/delegated-properties.html)
