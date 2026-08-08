@@ -1,22 +1,313 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 2.1 基本类型 / 数字 / 布尔 / 字符」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Kotlin 里**没有 primitive 和 wrapper 的语法区分**——`int` 和 `Integer` 都写作 `Int`。
+但装箱并没有消失，它只是从「你选类型」变成了「编译器根据可空性和泛型决定」。
+这一课讲的就是这个决定规则，以及它在 Android 上的性能含义。
+
+## 1. 一个 Int，两种字节码
+
+```kotlin
+fun main() {
+    val a: Int = 42        // 编译成 primitive int
+    val b: Int? = 42       // 编译成 java.lang.Integer（装箱）
+
+    val list = listOf(1, 2, 3)   // List<Integer>，泛型必须装箱
+
+    println("$a $b $list")
+}
+```
+
+规则就三条：
+
+| 场景 | 字节码 |
+| --- | --- |
+| 非空的 `Int` | `int`（primitive） |
+| 可空的 `Int?` | `Integer`（装箱） |
+| 泛型参数 `List<Int>` | `Integer`（泛型不支持 primitive） |
+
+<Callout type="warn" title="装箱会破坏 === 的直觉">
+
+```kotlin
+fun main() {
+    val a: Int = 127
+    val b: Int = 127
+    println(a == b)      // true
+    println(a === b)     // true —— 没装箱，比的是值
+
+    val c: Int? = 127
+    val d: Int? = 127
+    println(c == d)      // true
+    println(c === d)     // true —— Integer 缓存了 -128..127
+
+    val e: Int? = 128
+    val f: Int? = 128
+    println(e == f)      // true
+    println(e === f)     // false！超出缓存范围，是两个不同对象
+}
+```
+
+这就是 Java 的 `Integer` 缓存问题原样搬了过来。**结论：数字永远用 `==` 比较，
+不要用 `===`。**
+
 </Callout>
 
-## 学习提纲
+## 2. 没有隐式加宽转换
 
-- Int/Long/Double… 与 JVM 装箱的实际行为
-- 没有隐式加宽转换：必须显式 toLong()
-- 无符号类型 UInt/ULong
-- 字面量、下划线分隔与位运算 shl/and/or
-- Char 不再是数字
+Java 里 `int` 可以自动变成 `long`，Kotlin **不行**：
 
-## 与 Java / Android 的关键差异
+```kotlin
+fun main() {
+    val i: Int = 42
 
-Java 的 int 与 Integer 在 Kotlin 里都写作 Int，装箱由编译器根据可空性决定。
+    // val l: Long = i          // ❌ 编译错误：Type mismatch
+    val l: Long = i.toLong()    // ✅ 必须显式转
+
+    // 但字面量是例外：编译器知道 1 可以是 Long
+    val l2: Long = 1
+
+    println("$l $l2")
+    println(1.toByte() + 1)      // 注意：Byte + Int = Int
+}
+```
+
+<Callout type="java" title="为什么要这么严">
+
+因为隐式加宽在有装箱的语言里会出问题。考虑 Java：
+
+```java
+Integer a = 1;
+Long b = 1L;
+a.equals(b);   // false！但看起来应该 true
+```
+
+Kotlin 干脆禁止隐式转换，让这类比较在**编译期**就暴露。代价是你要多写
+`.toLong()`，收益是不会再有「明明相等却返回 false」的调试之夜。
+
+</Callout>
+
+完整的转换函数：`toByte()`、`toShort()`、`toInt()`、`toLong()`、`toFloat()`、
+`toDouble()`、`toChar()`。
+
+## 3. 字面量写法
+
+```kotlin
+fun main() {
+    val dec = 1_000_000        // 下划线分隔，提升可读性
+    val hex = 0xFF_EC_DE_5E
+    val bin = 0b1010_0101
+
+    val long = 1_000L          // L 后缀
+    val float = 3.14f          // f 后缀
+    val double = 3.14          // 默认是 Double
+    val sci = 1.23e5           // 科学计数法
+
+    println("$dec $hex $bin $long $float $double $sci")
+}
+```
+
+注意 Kotlin **没有八进制字面量**（Java 的 `010` 表示 8，是个著名的坑，Kotlin 直接砍了）。
+
+## 4. 位运算是中缀函数
+
+Java 的 `<<`、`>>`、`&`、`|` 在 Kotlin 里是具名的中缀函数：
+
+```kotlin
+fun main() {
+    val x = 0b0011
+
+    println(x shl 2)     // 左移 → 12
+    println(x shr 1)     // 右移（带符号）→ 1
+    println(x ushr 1)    // 无符号右移 → 1
+    println(x and 0b0101)  // 按位与 → 1
+    println(x or 0b0100)   // 按位或 → 7
+    println(x xor 0b0001)  // 异或 → 2
+    println(x.inv())       // 取反 → -4
+
+    // Android 上常见：检查 flag
+    val flags = 0b1010
+    val target = 0b0010
+    println("包含 target ? ${flags and target != 0}")
+}
+```
+
+只有 `Int` 和 `Long` 支持这些。
+
+## 5. Char 不再是数字
+
+Java 里 `char` 可以直接参与算术，Kotlin 里不行：
+
+```kotlin
+fun main() {
+    val c = 'A'
+
+    // println(c + 1)        // 这个其实可以，返回 Char 'B'
+    println(c + 1)           // B —— Char + Int = Char
+
+    // println(c * 2)        // ❌ 编译错误，没有这个操作
+    // val n: Int = c        // ❌ 不能直接当数字用
+
+    println(c.code)          // 65 —— 要显式取码点
+    println(65.toChar())     // A
+
+    println('7'.digitToInt())    // 7 —— 字符转数字，别用 c - '0'
+    println(c.isLetter())
+    println(c.lowercaseChar())
+}
+```
+
+<Callout type="tip">
+
+`'7'.digitToInt()` 比 Java 常见的 `c - '0'` 语义清晰得多，而且非数字字符会直接抛异常
+（还有 `digitToIntOrNull()` 版本），不会像 `c - '0'` 那样静默返回垃圾值。
+
+</Callout>
+
+## 6. 无符号类型
+
+Kotlin 有 `UByte` / `UShort` / `UInt` / `ULong`：
+
+```kotlin
+fun main() {
+    val u: UInt = 4_000_000_000u
+    println(u)
+
+    val b: UByte = 255u
+    println(b)
+
+    // 与有符号类型不能直接混算
+    println(u.toLong() + 1)
+}
+```
+
+<Callout type="warn">
+
+Android 上**用得很少**，因为它们在 JVM 上是用 `value class` 包装有符号类型模拟的，
+和 Java 互操作时很难受（Java 侧看到的是 `int`，语义会错）。
+
+真正的使用场景是解析二进制协议、处理字节流。日常业务代码里如果你想用 `UInt`，
+先想想是不是 `Int` 加个校验更合适。
+
+</Callout>
+
+## 7. Android 上的实际影响
+
+<Callout type="warn" title="可空的数字类型在热路径上有代价">
+
+`Int?` 会装箱，装箱意味着**堆分配**。在 `RecyclerView.onBindViewHolder`、
+`onDraw`、动画每帧回调这类高频路径上，大量 `Int?` 会显著增加 GC 压力。
+
+```kt
+// 😐 每次都可能装箱
+data class Item(val badgeCount: Int?)
+
+// ✅ 用哨兵值避免装箱（前提是有合理的哨兵）
+data class Item(val badgeCount: Int = 0)
+```
+
+同理，`List<Int>` 里的元素全是装箱的。真正性能敏感的场景用 `IntArray`
+（见[2.3 数组](/docs/02-types/arrays)），它编译成 `int[]`。
+
+但请注意顺序：**先测量，再优化**。绝大多数业务代码里这点开销完全不值得为它牺牲可读性。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>val a: Int? = 128; val b: Int? = 128</code>
+      <br />
+      那么 <code>a == b</code> 和 <code>a === b</code> 分别是什么？
+    </>
+  }
+  options={[
+    'true, true',
+    'true, false',
+    'false, false',
+    'false, true',
+  ]}
+  answer={1}
+>
+
+`a == b` 是 **true**：`==` 比较的是值（编译成 `equals`）。
+
+`a === b` 是 **false**：`Int?` 会装箱成 `java.lang.Integer`，而 JVM 只缓存
+`-128..127` 范围内的 `Integer` 实例。128 超出缓存，于是创建了两个不同对象，
+引用比较为 false。
+
+如果把 128 改成 127，`===` 就会变成 true——这种「取决于数值大小」的行为正是它不该被依赖的原因。
+**数字比较永远用 `==`。**
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      为什么 <code>val l: Long = someInt</code> 编译不过，但 <code>val l: Long = 1</code> 可以？
+    </>
+  }
+  options={[
+    '因为 1 是常量，会被优化掉',
+    '因为整数字面量的类型由期望类型决定，而变量的类型已经确定了',
+    '因为 1 比较小，能安全转换',
+    '这两行其实都编译不过',
+  ]}
+  answer={1}
+>
+
+Kotlin 禁止**隐式加宽转换**：一个已经确定是 `Int` 类型的变量，不会自动变成 `Long`，
+必须写 `.toLong()`。
+
+但**整数字面量**的类型是由上下文期望的类型决定的——写 `val l: Long = 1` 时，
+编译器直接把 `1` 当作 `Long` 字面量处理，压根没有转换发生。
+
+这个设计的动机是避免 Java 里 `Integer(1).equals(Long(1L)) == false` 这类
+「看起来相等实际不等」的问题，把它提前到编译期暴露。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  type="fill"
+  question="把字符 '7' 转成数字 7，写出推荐的 Kotlin 写法。"
+  answer={["'7'.digitToInt()", "digitToInt()"]}
+>
+
+`digitToInt()`。
+
+不要用从 Java 带来的 `c - '0'`：它在字符不是数字时会静默返回一个垃圾值
+（比如 `'a' - '0'` 得到 49），而 `digitToInt()` 会直接抛
+`IllegalArgumentException`。需要容错时用 `digitToIntOrNull()`。
+
+另外注意 `'7'.code` 是 55（Unicode 码点），不是 7——两者别混淆。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些写法会导致装箱？"
+  options={[
+    'val a: Int = 42',
+    'val b: Int? = 42',
+    'val c = listOf(1, 2, 3)',
+    'val d = IntArray(3)',
+  ]}
+  answer={[1, 2]}
+>
+
+- **A 不装箱**：非空的 `Int` 编译成 primitive `int`。
+- **B 装箱**：可空类型需要能表示 null，primitive 做不到，只能用 `Integer`。
+- **C 装箱**：JVM 泛型不支持 primitive，`List<Int>` 实际是 `List<Integer>`。
+- **D 不装箱**：`IntArray` 直接编译成 `int[]`，这正是它存在的理由。
+
+在 `onBindViewHolder`、`onDraw` 这类高频路径上，B 和 C 会带来实打实的 GC 压力。
+但普通业务代码里不必为此纠结——**先测量再优化**。
+
+</Quiz>
 
 ## 官方参考
 
 - 官方中文：[basic-types](https://book.kotlincn.net/text/basic-types.html)
-- 官方英文：[basic-types](https://kotlinlang.org/docs/basic-types.html)
+- 官方英文：[numbers](https://kotlinlang.org/docs/numbers.html) ／ [characters](https://kotlinlang.org/docs/characters.html)

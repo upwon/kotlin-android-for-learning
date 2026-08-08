@@ -1,19 +1,342 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 2.4 类型检测与转换（is / as / smart cast）」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+Java 里 `instanceof` 之后必然跟一次强转，这个重复动作 Kotlin 用 **smart cast** 消掉了。
+但 smart cast 有它的前提条件，搞不清楚就会遇到「明明判断过了却还是编译错误」。
+
+## 1. is / !is
+
+```kotlin
+fun describe(obj: Any): String {
+    if (obj is String) {
+        // 分支内 obj 已经是 String，不需要 (obj as String)
+        return "字符串，长度 ${obj.length}"
+    }
+    if (obj !is Number) {
+        return "既不是字符串也不是数字"
+    }
+    // 这里 obj 是 Number
+    return "数字，转 Int 是 ${obj.toInt()}"
+}
+
+fun main() {
+    println(describe("Kotlin"))
+    println(describe(3.14))
+    println(describe(true))
+}
+```
+
+smart cast 会在这些位置生效：
+
+```kotlin
+fun check(x: Any) {
+    // 1. if 分支内
+    if (x is String) println(x.length)
+
+    // 2. && 的右侧
+    if (x is String && x.length > 3) println("长字符串")
+
+    // 3. || 的右侧（取反后）
+    if (x !is String || x.length > 3) println("不是字符串，或者是长字符串")
+
+    // 4. when 分支内
+    when (x) {
+        is Int -> println(x + 1)
+        is String -> println(x.uppercase())
+        is List<*> -> println(x.size)
+    }
+
+    // 5. 提前返回之后
+    if (x !is String) return
+    println(x.length)   // 这里 x 已经是 String
+}
+
+fun main() {
+    check("Kotlin")
+    check(42)
+}
+```
+
+## 2. as 与 as?
+
+```kotlin
+fun main() {
+    val any: Any = "Kotlin"
+
+    val s1 = any as String        // 不安全转换，失败抛 ClassCastException
+    println(s1.length)
+
+    val n1 = any as? Int          // 安全转换，失败返回 null
+    println(n1)
+
+    val n2 = any as? Int ?: -1    // 配合 Elvis 兜底
+    println(n2)
+}
+```
+
+<Callout type="warn" title="as? 只吞类型转换失败，不吞 null">
+
+```kotlin
+fun main() {
+    val x: Any? = null
+
+    println(x as? String)        // null —— 因为 x 本来就是 null
+    println((x as? String)?.length ?: 0)
+
+    // 这个才是要小心的：as 转可空类型永远成功
+    val y: Any = "hi"
+    println(y as String?)        // 合法，结果是 "hi"
+}
+```
+
+`as?` 的语义是「转不成就给 null」，所以它**总是**返回可空类型。
+用完还是要处理空，别以为 `as?` 之后就安全了。
+
 </Callout>
 
-## 学习提纲
+## 3. smart cast 什么时候会失效
 
-- is / !is 与自动的智能转换 smart cast
-- 不安全转换 as 与安全转换 as?
-- smart cast 失效的场景（var 属性、跨模块的 open 属性）
-- 泛型擦除与 reified 的关系
+这是本课的重点。编译器只在**能证明「检查之后值没被改过」**时才做 smart cast。
 
-## 与 Java / Android 的关键差异
+```kt
+class User {
+    var nickname: String? = null       // 可变属性
 
-instanceof 之后不用再手写一次强转，但 smart cast 有它的前提条件。
+    fun show() {
+        if (nickname != null) {
+            // ❌ Smart cast to 'String' is impossible, because 'nickname'
+            //    is a mutable property that could have been changed by this time
+            println(nickname.length)
+        }
+    }
+}
+```
+
+失效的完整场景：
+
+| 情况 | 为什么 |
+| --- | --- |
+| `var` 属性 | 其他线程或其他代码可能在检查后改掉它 |
+| 有自定义 getter 的属性 | 每次访问可能返回不同的值 |
+| `open` 的 `val` 属性 | 子类可能覆盖成带 getter 的实现 |
+| 其他模块的 `val` 属性 | 编译器看不到它的实现，无法保证 |
+| 被 lambda 捕获并修改的局部 `var` | 闭包可能改了它 |
+
+<Callout type="success" title="通用解法：拷进局部 val">
+
+```kotlin
+class User(var nickname: String? = null) {
+    fun show() {
+        // 解法 1：拷到局部 val，编译器就能证明了
+        val local = nickname
+        if (local != null) println(local.length)
+
+        // 解法 2：直接用 ?.let
+        nickname?.let { println(it.length) }
+
+        // 解法 3：Elvis 提前返回
+        val name = nickname ?: return
+        println(name.length)
+    }
+}
+
+fun main() {
+    User("Summer").show()
+    User().show()
+}
+```
+
+三种写法都行，实践中 `?.let` 最常见。
+
+</Callout>
+
+## 4. 泛型与类型擦除
+
+JVM 上泛型信息在运行时被擦除，所以：
+
+```kotlin
+fun main() {
+    val list: Any = listOf(1, 2, 3)
+
+    // println(list is List<String>)   // ❌ 编译错误：Cannot check for instance of erased type
+
+    println(list is List<*>)           // ✅ 星投影，只检查「是不是 List」
+    if (list is List<*>) {
+        println("元素个数 ${list.size}")
+        // 元素类型是 Any?，取出来要自己判断
+        println(list.first()?.javaClass?.simpleName)
+    }
+}
+```
+
+<Callout type="warn" title="filterIsInstance 才是你想要的">
+
+想从混杂的集合里挑出某个类型的元素，别自己写 `is` 判断：
+
+```kotlin
+fun main() {
+    val mixed: List<Any> = listOf(1, "a", 2.0, "b", 3)
+
+    val strings: List<String> = mixed.filterIsInstance<String>()
+    println(strings)
+
+    val ints = mixed.filterIsInstance<Int>()
+    println(ints.sum())
+}
+```
+
+它内部用了 **reified** 类型参数（见 [4.9 泛型](/docs/04-classes/generics)），
+所以能在运行时拿到真实类型。
+
+</Callout>
+
+## 5. Android 实战
+
+<Callout type="tip" title="用 sealed + when 替代大量 is 判断">
+
+如果你在写一长串 `is` 判断，通常说明类型层级应该改成 `sealed`：
+
+```kt
+// 😐 分散的 is 判断，漏了分支编译器不会提醒
+fun render(state: Any) {
+    if (state is Loading) showSpinner()
+    else if (state is Success) showData(state.data)
+    else if (state is Error) showError(state.message)
+}
+
+// ✅ sealed + when，穷尽性由编译器保证
+sealed interface UiState {
+    data object Loading : UiState
+    data class Success(val data: List<String>) : UiState
+    data class Error(val message: String) : UiState
+}
+
+fun render(state: UiState) = when (state) {
+    UiState.Loading -> showSpinner()
+    is UiState.Success -> showData(state.data)
+    is UiState.Error -> showError(state.message)
+}
+```
+
+后者在新增分支时，所有没覆盖到的 `when` 都会编译报错。详见
+[4.8 密封类](/docs/04-classes/sealed-classes)。
+
+</Callout>
+
+findViewById 与类型转换：
+
+```kt
+// 老写法需要强转
+val text = findViewById<TextView>(R.id.title)      // 泛型版本，推荐
+val text2 = findViewById(R.id.title) as TextView   // 不必要
+
+// 更好：ViewBinding 从源头消除了转换
+binding.title.text = "标题"
+```
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      为什么这段代码编译不过？
+      <br />
+      <code>class A {'{'} var s: String? = null; fun f() {'{'} if (s != null) println(s.length) {'}'} {'}'}</code>
+    </>
+  }
+  options={[
+    '因为 s 没有初始化',
+    '因为 s 是可变属性 var，编译器无法保证检查之后它没被改成 null',
+    '因为 println 不接受可空参数',
+    '因为缺少 as String 强转',
+  ]}
+  answer={1}
+>
+
+smart cast 的前提是编译器能**证明**「检查之后这个值没变过」。`var` 属性做不到这个保证——
+理论上另一个线程可以在 `if` 和 `println` 之间把它改成 null。
+
+三种解法：
+
+1. `val local = s; if (local != null) println(local.length)` —— 局部 `val` 编译器能证明
+2. `s?.let { println(it.length) }` —— 最常用
+3. `val name = s ?: return; println(name.length)` —— 提前返回
+
+同样失效的还有：带自定义 getter 的属性、`open val`、其他模块的 `val`。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>val n = any as? Int</code>，如果 <code>any</code> 是 String，n 的值和类型分别是？
+    </>
+  }
+  options={[
+    '抛 ClassCastException',
+    'null，类型是 Int?',
+    '0，类型是 Int',
+    '编译错误',
+  ]}
+  answer={1}
+>
+
+`as?` 是**安全转换**：转不成就返回 null，不抛异常。因此它的返回类型**总是可空的**
+（这里是 `Int?`）。
+
+要注意的是 `as?` 只处理「类型不匹配」，不处理「值本身是 null」——如果 `any` 本来就是 null，
+结果同样是 null。所以用完仍然要处理空值，常见写法是 `any as? Int ?: 0`。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question={
+    <>
+      为什么 <code>list is List&lt;String&gt;</code> 编译不过，而 <code>list is List&lt;*&gt;</code> 可以？
+    </>
+  }
+  options={[
+    '语法写错了，应该用 List<String>()',
+    'JVM 泛型运行时被擦除，无法检查元素类型；星投影只检查「是不是 List」',
+    '因为 String 是 final 类',
+    '两个其实都不能编译',
+  ]}
+  answer={1}
+>
+
+JVM 的泛型是**擦除**的：运行时只知道这是个 `List`，不知道里面装的是什么。
+所以 `is List<String>` 是一个编译器无法生成正确代码的检查，直接被禁止。
+
+`List<*>`（星投影）表示「元素类型未知的 List」，这个检查只验证对象是不是 `List`，
+运行时可以做到。代价是取出的元素类型是 `Any?`。
+
+想按类型筛元素，用 `filterIsInstance<String>()`——它靠 **reified** 类型参数
+在运行时保留了类型信息。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="以下哪些位置 smart cast 会生效？"
+  options={[
+    'if (x is String) 的分支内',
+    'if (x is String && x.length > 0) 的 && 右侧',
+    'if (x !is String) return 之后的代码',
+    'x 是其他模块的 val 属性时，在 if (x != null) 分支内',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+A、B、C 都生效。C 尤其实用——提前返回之后，编译器知道剩下的代码里 `x` 一定是 `String`。
+
+**D 不生效**：其他模块的 `val` 属性，编译器看不到它的实现（可能是个带自定义 getter
+的属性，每次返回不同值），无法保证稳定性。同一模块内的 `val` 则没问题。
+
+补充一个常被忽略的：`||` 的右侧也生效，只不过是**取反**后的类型——
+`if (x !is String || x.length > 3)` 里，`x` 在右侧是 `String`。
+
+</Quiz>
 
 ## 官方参考
 

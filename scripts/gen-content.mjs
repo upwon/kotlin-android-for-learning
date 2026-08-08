@@ -151,6 +151,7 @@ const parts = [
         ],
         javaNote: 'Java 的 int 与 Integer 在 Kotlin 里都写作 Int，装箱由编译器根据可空性决定。',
         official: 'basic-types',
+        deep: true,
       },
       {
         num: '2.2',
@@ -165,6 +166,7 @@ const parts = [
         ],
         javaNote: '字符串拼接与 String.format 基本可以被模板完全取代。',
         official: 'strings',
+        deep: true,
       },
       {
         num: '2.3',
@@ -179,6 +181,7 @@ const parts = [
         ],
         javaNote: 'Android 里除性能敏感场景外，几乎总应该用 List 而不是数组。',
         official: 'arrays',
+        deep: true,
       },
       {
         num: '2.4',
@@ -193,6 +196,7 @@ const parts = [
         ],
         javaNote: 'instanceof 之后不用再手写一次强转，但 smart cast 有它的前提条件。',
         official: 'typecasts',
+        deep: true,
       },
     ],
   },

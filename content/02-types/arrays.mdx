@@ -1,19 +1,308 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 2.3 数组」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+数组在 Kotlin 里的地位比 Java 低得多——**日常业务代码几乎总该用 `List`**。
+这一课主要讲清楚什么时候必须用数组，以及 `Array<T>` 和 `IntArray` 那个容易踩的区别。
+
+## 1. `Array<T>` vs `IntArray`：装箱的区别
+
+```kotlin
+fun main() {
+    val boxed: Array<Int> = arrayOf(1, 2, 3)     // → Integer[]，每个元素都装箱
+    val primitive: IntArray = intArrayOf(1, 2, 3) // → int[]，无装箱
+
+    println(boxed.sum())
+    println(primitive.sum())
+    println(primitive.javaClass.simpleName)
+}
+```
+
+| 写法 | 字节码 | 用途 |
+| --- | --- | --- |
+| `Array<Int>` | `Integer[]` | 需要泛型或可空元素时 |
+| `IntArray` | `int[]` | 性能敏感场景 |
+| `Array<Int?>` | `Integer[]` | 元素可为 null |
+
+同族的还有 `ByteArray`、`ShortArray`、`LongArray`、`FloatArray`、`DoubleArray`、
+`CharArray`、`BooleanArray`。
+
+<Callout type="warn" title="它们之间不能互相赋值">
+
+`IntArray` 和 `Array<Int>` 是**完全不同的类型**，没有继承关系：
+
+```kt
+val a: IntArray = intArrayOf(1, 2)
+// val b: Array<Int> = a          // ❌ 编译错误
+val b: Array<Int> = a.toTypedArray()   // ✅ 显式转换（会装箱）
+val c: IntArray = b.toIntArray()       // ✅ 转回来
+```
+
+调 Java API 时要特别注意签名要的是哪个。比如 `Bundle.putIntArray(String, int[])`
+要的是 `IntArray`，传 `Array<Int>` 编译不过。
+
 </Callout>
 
-## 学习提纲
+## 2. 构造方式
 
-- `Array<T>` vs `IntArray`/`LongArray`（装箱差异）
-- arrayOf / IntArray(n) { } 的构造方式
-- vararg 与展开运算符 `*`
-- 数组不支持型变：`Array<String>` 不是 `Array<Any>`
+```kotlin
+fun main() {
+    // 字面量
+    val a = arrayOf("a", "b", "c")
+    val b = intArrayOf(1, 2, 3)
 
-## 与 Java / Android 的关键差异
+    // 指定大小 + 初始化 lambda（参数是下标）
+    val squares = IntArray(5) { it * it }
+    println(squares.joinToString())
 
-Android 里除性能敏感场景外，几乎总应该用 List 而不是数组。
+    // 默认值填充
+    val zeros = IntArray(3)              // 全 0
+    val nulls = arrayOfNulls<String>(3)  // 全 null，类型是 Array<String?>
+    println("${zeros.joinToString()} / ${nulls.joinToString()}")
+
+    // 二维数组：数组的数组
+    val grid = Array(3) { row -> IntArray(3) { col -> row * 3 + col } }
+    grid.forEach { println(it.joinToString(" ")) }
+}
+```
+
+<Callout type="tip">
+
+`IntArray(n) { ... }` 这个带 lambda 的构造函数在算法题和图形计算里非常好用，
+比 Java 的 `new int[n]` 加一个 for 循环填充要紧凑。
+
+注意 lambda 的参数是**下标**，不是元素。
+
+</Callout>
+
+## 3. 常用操作
+
+```kotlin
+fun main() {
+    val arr = intArrayOf(5, 3, 8, 1)
+
+    println(arr.size)
+    println(arr[0])
+    println(arr.first())
+    println(arr.getOrNull(10))          // 越界返回 null，不抛异常
+    println(arr.getOrElse(10) { -1 })
+
+    println(arr.sorted())               // 返回 List，不改原数组
+    arr.sort()                          // 原地排序
+    println(arr.joinToString())
+
+    println(arr.indices)                // 0..3
+    println(arr.lastIndex)
+    for ((i, v) in arr.withIndex()) print("$i=$v ")
+    println()
+
+    // 集合的那套扩展函数数组上基本都有
+    println(arr.filter { it > 2 })      // 注意：返回 List
+    println(arr.map { it * 2 })         // 返回 List
+    println(arr.contains(8))
+    println(8 in arr)
+}
+```
+
+<Callout type="warn" title="filter / map 返回的是 List，不是数组">
+
+这是个高频困惑点。数组上的 `filter`、`map` 等扩展函数**返回 `List`**，
+因为在编译期无法为任意 `T` 创建数组（类型擦除）。
+
+想要数组结果得再转一次：
+
+```kt
+val doubled: IntArray = arr.map { it * 2 }.toIntArray()
+```
+
+这也从侧面说明：**如果你要对数据做一串变换，一开始就该用 `List`。**
+
+</Callout>
+
+## 4. 数组不支持型变
+
+```kt
+val strings: Array<String> = arrayOf("a", "b")
+// val objects: Array<Any> = strings    // ❌ 编译错误
+```
+
+Java 里这是**允许**的（数组协变），代价是运行时可能抛 `ArrayStoreException`：
+
+```java
+String[] strings = {"a", "b"};
+Object[] objects = strings;      // Java 允许
+objects[0] = 42;                 // 编译通过，运行时 ArrayStoreException
+```
+
+Kotlin 把这个洞堵上了：`Array<T>` 中的 `T` 是**不变的** invariant。
+想表达「只读的数组」用 `Array<out T>`：
+
+```kotlin
+fun printAll(items: Array<out Any>) {
+    println(items.joinToString())
+}
+
+fun main() {
+    printAll(arrayOf("a", "b"))
+    printAll(arrayOf(1, 2))
+}
+```
+
+型变的完整规则见 [4.9 泛型](/docs/04-classes/generics)。
+
+## 5. vararg 与展开运算符
+
+`vararg` 参数在函数内部就是一个数组：
+
+```kotlin
+fun tag(vararg names: String): String {
+    // names 的类型是 Array<out String>
+    return names.joinToString("#", prefix = "#")
+}
+
+fun main() {
+    println(tag("kotlin", "android"))
+
+    val existing = arrayOf("coroutine", "flow")
+    println(tag(*existing))                 // * 展开
+    println(tag("new", *existing, "extra"))  // 可以混用
+}
+```
+
+Java 里传数组给可变参数是直接传，Kotlin 必须写 `*`（叫 spread operator）。
+它会**复制一份数组**，所以在循环里高频调用要留意。
+
+## 6. 什么时候才该用数组
+
+<Callout type="success">
+
+**默认用 `List`。** 只有这几种情况用数组：
+
+1. **和 Java / Android API 互操作**——签名要 `int[]`、`String[]` 就得给数组。
+   例如 `Bundle.putIntArray`、`ContentResolver.query` 的 `projection`。
+2. **性能敏感的数值计算**——图像处理、音频处理、算法密集循环，`IntArray`/`FloatArray`
+   能省掉装箱和 `List` 的间接层。
+3. **`vararg` 参数**——语言规定就是数组。
+4. **注解的数组参数**——注解里只能用数组。
+
+其他所有场景，`List` 在可读性、API 丰富度、不可变性上全面胜出。
+
+</Callout>
+
+<Callout type="warn" title="数组没有有意义的 equals">
+
+```kotlin
+fun main() {
+    val a = intArrayOf(1, 2, 3)
+    val b = intArrayOf(1, 2, 3)
+
+    println(a == b)                  // false！比的是引用
+    println(a.contentEquals(b))      // true —— 要用这个
+
+    println(listOf(1, 2, 3) == listOf(1, 2, 3))   // true，List 就正常
+}
+```
+
+同理 `toString()` 也是没用的（输出 `[I@1b6d3586`），要用 `contentToString()`。
+**这是 `data class` 里放数组的经典坑**——生成的 `equals` 用的是数组的引用比较，
+两个内容相同的对象会不相等。data class 里应该放 `List`。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      <code>Array&lt;Int&gt;</code> 和 <code>IntArray</code> 的区别是什么？
+    </>
+  }
+  options={[
+    '没有区别，IntArray 只是别名',
+    'Array<Int> 编译成 Integer[]（元素装箱），IntArray 编译成 int[]（不装箱）',
+    'IntArray 长度不可变，Array<Int> 可变',
+    'Array<Int> 只能存非空值，IntArray 可以存 null',
+  ]}
+  answer={1}
+>
+
+核心是**装箱**：`Array<Int>` 是泛型数组，JVM 泛型不支持 primitive，
+所以每个元素都是 `Integer` 对象；`IntArray` 直接对应 `int[]`。
+
+而且两者**没有继承关系，不能互相赋值**，只能通过 `toTypedArray()` /
+`toIntArray()` 显式转换。调 Java API（比如 `Bundle.putIntArray`）时要看清签名要哪个。
+
+顺带一提，两者长度都不可变（这是数组的性质），可变的只是元素内容。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  question={
+    <>
+      <code>intArrayOf(1,2,3).map {'{'} it * 2 {'}'}</code> 的返回类型是什么？
+    </>
+  }
+  options={['IntArray', 'Array<Int>', 'List<Int>', 'Sequence<Int>']}
+  answer={2}
+>
+
+`List<Int>`。数组上的 `map`、`filter` 等扩展函数一律返回 `List`——
+因为类型擦除让编译器无法在运行时为任意 `T` 创建数组。
+
+想拿回数组要再转一次：`.map { it * 2 }.toIntArray()`。
+
+这个「转来转去」的别扭感本身就是一个信号：**需要做链式变换的数据，
+一开始就该用 `List`。** 数组留给互操作和性能热点。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="为什么 Kotlin 不允许把 Array<String> 赋给 Array<Any>，而 Java 允许？"
+  options={[
+    'Kotlin 的数组是不可变的',
+    'Java 的数组协变会导致运行时 ArrayStoreException，Kotlin 把这个洞在编译期堵上了',
+    'Kotlin 没有 Any 类型',
+    '这只是语法限制，加个强转就行',
+  ]}
+  answer={1}
+>
+
+Java 的数组是**协变**的：`String[]` 可以当 `Object[]` 用。代价是类型安全只能靠运行时检查：
+
+```java
+Object[] objects = new String[]{"a"};
+objects[0] = 42;    // 编译通过，运行时 ArrayStoreException
+```
+
+Kotlin 让 `Array<T>` 的 `T` **不变** invariant，这个错误就变成了编译错误。
+
+需要「只读地接受任意元素类型的数组」时，用 `Array<out Any>` 显式声明协变——
+这样编译器知道你只会读不会写，是安全的。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  type="multi"
+  question="哪些情况下应该用数组而不是 List？"
+  options={[
+    '需要调用签名为 int[] 的 Java/Android API',
+    '图像处理里的逐像素计算',
+    'vararg 参数在函数内部',
+    '从网络请求返回的数据列表',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+前三项都是数组的正当场景：互操作要求、性能热点（避免装箱和间接层）、
+以及语言规定（`vararg` 在函数内就是数组）。
+
+**D 应该用 `List`**：网络数据要做过滤、映射、排序，而这些操作在数组上全都返回 `List`，
+用数组只会让你不停地转换。而且 `List` 是只读接口，更适合表达「这份数据不该被改」。
+
+另外提醒一句：`data class` 里**不要放数组**——生成的 `equals` 会用数组的引用比较，
+两个内容相同的对象会不相等。放 `List`。
+
+</Quiz>
 
 ## 官方参考
 

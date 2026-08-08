@@ -1,19 +1,306 @@
-<Callout type="note">
-**骨架页**：本页已经列出学习提纲与官方对照入口，精讲内容待点亮。
-如果你正在跟着这个站系统过一遍，可以在聊天里说「点亮 2.2 字符串 & 字符串模板」，
-由 Claude 产出这一章的 MDX 再替换本文件。
+字符串是 Kotlin 相对 Java 提升最直观的地方：模板取代拼接和 `String.format`，
+原始字符串取代转义地狱，一堆扩展函数取代 `StringUtils`。
+
+## 1. 字符串模板
+
+```kotlin
+data class User(val name: String, val age: Int)
+
+fun main() {
+    val user = User("Summer", 28)
+
+    println("姓名：${user.name}")            // 复杂表达式用 ${}
+    val name = user.name
+    println("姓名：$name")                    // 简单变量可以省略大括号
+
+    println("明年 ${user.age + 1} 岁")
+    println("大写：${name.uppercase()}")
+    println("是否成年：${if (user.age >= 18) "是" else "否"}")   // 可以嵌套
+}
+```
+
+规则：`$变量名` 用于简单标识符，`${表达式}` 用于其他一切。
+
+<Callout type="tip" title="团队约定：一律写大括号">
+
+`$name` 和 `${name}` 完全等价，但统一写 `${}` 有两个好处：不用记「什么时候能省」，
+以及 `$nameText` 这种想拼接的情况不会被误解析成变量 `nameText`。
+
+ktlint 有对应规则可以强制（`string-template`），不过官方默认是**鼓励省略**的，
+团队里选一个写进配置即可，别在 review 里争。
+
 </Callout>
 
-## 学习提纲
+想输出字面的 `$` 符号：
 
-- 字符串模板 `$name` / `${expr}`
-- 原始字符串 """ 与 trimIndent()
-- Java StringBuilder / String.format 的 Kotlin 写法
-- 常用扩展：isNullOrEmpty、isBlank、substringAfter…
+```kotlin
+fun main() {
+    val price = 9.9
+    println("价格：\$$price")          // 转义
+    println("价格：${'$'}$price")       // 或者插一个字符字面量
+}
+```
 
-## 与 Java / Android 的关键差异
+## 2. 原始字符串
 
-字符串拼接与 String.format 基本可以被模板完全取代。
+三引号包裹，**不处理转义，可以换行**：
+
+```kotlin
+fun main() {
+    val json = """
+        {
+          "name": "Summer",
+          "path": "C:\Users\test"
+        }
+    """.trimIndent()
+
+    println(json)
+
+    val regex = """\d{4}-\d{2}-\d{2}""".toRegex()
+    println(regex.matches("2026-08-08"))
+}
+```
+
+<Callout type="warn" title="trimIndent() 不是可选的">
+
+不调用 `trimIndent()` 时，源码里的缩进会**原样进入字符串**：
+
+```kotlin
+fun main() {
+    val without = """
+        line1
+        line2
+    """
+    val with = """
+        line1
+        line2
+    """.trimIndent()
+
+    println("不调用：${without.lines().map { it.length }}")
+    println("调用后：${with.lines().map { it.length }}")
+}
+```
+
+`trimIndent()` 会找出所有非空行的**最小公共缩进**并去掉，同时移除首尾的空行。
+另有 `trimMargin()`，用 `|` 显式标记行首：
+
+```kt
+val text = """
+    |第一行
+    |第二行
+""".trimMargin()
+```
+
+</Callout>
+
+原始字符串对**正则**是刚需——Java 里写 `"\\d{4}"`（双反斜杠），Kotlin 里 `"""\d{4}"""` 就行。
+
+## 3. Java 常用 API 的对照
+
+```kotlin
+fun main() {
+    val s = "  Hello, Kotlin World  "
+
+    println(s.trim())
+    println(s.isBlank())                  // 全是空白？
+    println("".isEmpty())                 // 长度为 0？
+
+    val n: String? = null
+    println(n.isNullOrBlank())            // 可空接收者，不用先判空
+    println(n.orEmpty())                  // null → ""
+
+    println(s.trim().split(", "))
+    println(s.trim().replace("Kotlin", "Android"))
+    println(s.contains("Kotlin", ignoreCase = true))
+    println(s.trim().startsWith("Hello"))
+
+    // 截取：比 substring(indexOf(...)) 清楚得多
+    val email = "summer@example.com"
+    println(email.substringBefore("@"))       // summer
+    println(email.substringAfter("@"))        // example.com
+    println(email.substringAfterLast("."))    // com
+
+    // 拼接集合
+    println(listOf("a", "b", "c").joinToString(separator = " | ", prefix = "[", postfix = "]"))
+}
+```
+
+| Java | Kotlin |
+| --- | --- |
+| `StringUtils.isBlank(s)` | `s.isNullOrBlank()` |
+| `s == null ? "" : s` | `s.orEmpty()` |
+| `String.format("%s: %d", a, b)` | `"$a: $b"` |
+| `s.substring(s.indexOf("@") + 1)` | `s.substringAfter("@")` |
+| `String.join(", ", list)` | `list.joinToString(", ")` |
+| `sb.append(...)` 循环 | `buildString { append(...) }` |
+| `s.equalsIgnoreCase(t)` | `s.equals(t, ignoreCase = true)` |
+
+<Callout type="warn" title="== 不是 equalsIgnoreCase">
+
+`s == t` 是区分大小写的结构相等。想忽略大小写必须显式写：
+
+```kt
+s.equals(t, ignoreCase = true)
+```
+
+这是从 Java 转过来偶尔会踩的：因为 `==` 变成了 `equals`，有人误以为它也"智能"了。
+
+</Callout>
+
+## 4. buildString
+
+需要循环拼接时，不要用 `+=`（每次都创建新字符串）：
+
+```kotlin
+fun main() {
+    val items = listOf("苹果", "香蕉", "橘子")
+
+    // ✅ 内部就是 StringBuilder，还能带逻辑
+    val text = buildString {
+        append("购物清单：\n")
+        items.forEachIndexed { index, item ->
+            append("  ${index + 1}. $item")
+            if (index < items.lastIndex) append("\n")
+        }
+    }
+    println(text)
+
+    // 纯拼接的话 joinToString 更直接
+    println(items.joinToString("、", prefix = "共 ${items.size} 项："))
+}
+```
+
+## 5. 字符串比较与遍历
+
+```kotlin
+fun main() {
+    val a = "kotlin"
+    val b = "kot" + "lin"
+
+    println(a == b)      // true —— 内容相等
+    println(a === b)     // 编译期常量折叠，这里可能是 true，别依赖它
+
+    // 字符串就是 Char 的序列
+    println(a.first())
+    println(a.filter { it in "aeiou" })
+    println(a.count { it == 'n' })
+    println(a.reversed())
+    for ((i, c) in a.withIndex()) print("$i:$c ")
+}
+```
+
+## 6. Android 场景
+
+<Callout type="tip" title="别用模板拼接给用户看的文案">
+
+```kt
+// ❌ 无法国际化，也处理不了复数规则
+textView.text = "共 $count 条评论"
+
+// ✅ 用 string resource
+textView.text = getString(R.string.comment_count, count)
+
+// ✅ 复数用 plurals（英文 1 comment / 2 comments，中文没区别但别的语言有）
+textView.text = resources.getQuantityString(R.plurals.comments, count, count)
+```
+
+字符串模板用在**日志、调试输出、拼 URL、构造 JSON** 这些不面向用户的地方。
+
+</Callout>
+
+## 练习
+
+<Quiz
+  index={1}
+  question={
+    <>
+      三引号字符串如果不调用 <code>trimIndent()</code>，会怎样？
+    </>
+  }
+  options={[
+    '编译错误',
+    '源码里的缩进会原样成为字符串内容的一部分',
+    '自动去掉缩进，trimIndent() 是多余的',
+    '只保留第一行的缩进',
+  ]}
+  answer={1}
+>
+
+原始字符串是**完全字面**的：源码里怎么写，字符串就是什么，包括每行开头的缩进空格
+和首尾的换行。
+
+`trimIndent()` 会计算所有非空行的**最小公共缩进**并统一去掉，同时移除首尾空行。
+另一个选择是 `trimMargin()`，用 `|` 显式标出每行的起点。
+
+忘记调用是写多行 JSON、SQL 时最常见的 bug——字符串看起来对，实际每行前面挂着一堆空格。
+
+</Quiz>
+
+<Quiz
+  index={2}
+  type="fill"
+  question={
+    <>
+      从 <code>"summer@example.com"</code> 中取出域名部分 <code>example.com</code>，用最直接的写法。
+    </>
+  }
+  answer={['email.substringAfter("@")', 'substringAfter("@")']}
+>
+
+`substringAfter("@")`。
+
+对比 Java 的 `email.substring(email.indexOf("@") + 1)`——后者不仅啰嗦，
+而且 `indexOf` 返回 -1 时会静默产生错误结果。
+
+这一族函数还有 `substringBefore`、`substringBeforeLast`、`substringAfterLast`，
+每个都支持传 `missingDelimiterValue` 指定「找不到分隔符时返回什么」，默认是返回原字符串。
+
+</Quiz>
+
+<Quiz
+  index={3}
+  question="在 Kotlin 里怎么做忽略大小写的字符串比较？"
+  options={[
+    's == t，因为 == 已经是 equals 了',
+    's.equals(t, ignoreCase = true)',
+    's.equalsIgnoreCase(t)',
+    's.toLowerCase() == t.toLowerCase()',
+  ]}
+  answer={1}
+>
+
+`s.equals(t, ignoreCase = true)`。
+
+`==` 确实被编译成 `equals`，但那是**区分大小写**的版本。Kotlin 没有
+`equalsIgnoreCase` 这个方法名，而是给 `equals` 加了一个 `ignoreCase` 参数。
+
+D 那种写法能工作但有两个问题：多了两次字符串分配；而且在土耳其语等 locale 下
+大小写转换有特殊规则，可能产生意外结果（这就是为什么 Kotlin 把 `toLowerCase()`
+废弃成了需要显式传 locale 的 `lowercase()`）。
+
+</Quiz>
+
+<Quiz
+  index={4}
+  question="给用户展示「共 3 条评论」这样的文案，应该怎么做？"
+  options={[
+    '用字符串模板 "共 $count 条评论"',
+    '用 getString(R.string.comment_count, count) 或 plurals',
+    '用 String.format("共 %d 条评论", count)',
+    '用 buildString 拼接',
+  ]}
+  answer={1}
+>
+
+字符串模板很好用，但**面向用户的文案不能硬编码在代码里**：
+
+1. 无法国际化——换语言要改代码。
+2. 处理不了复数规则。中文没有单复数，但英文 `1 comment` / `2 comments`、
+   俄语有三种形式。`getQuantityString` + `plurals` 就是为此设计的。
+
+字符串模板的正确战场是**日志、调试输出、拼 URL、构造请求体**这些不给用户看的地方。
+
+</Quiz>
 
 ## 官方参考
 
