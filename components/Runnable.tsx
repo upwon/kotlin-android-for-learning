@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useId, useRef, useState } from 'react'
+import { currentResolvedTheme, subscribeToTheme, type ResolvedTheme } from '@/lib/theme'
 
 // JetBrains 官方的 Kotlin Playground。
 // 想改成自托管（例如把 node_modules/kotlin-playground/dist/playground.min.js
@@ -68,19 +69,25 @@ export function Runnable({
   const hostRef = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<Status>('idle')
 
+  // 服务端不知道主题，初始为 null，保证 SSR 与客户端首帧一致；
+  // 挂载后解析出真实主题并订阅后续变化。
+  const [theme, setTheme] = useState<ResolvedTheme | null>(null)
+
   useEffect(() => {
+    setTheme(currentResolvedTheme())
+    return subscribeToTheme(setTheme)
+  }, [])
+
+  useEffect(() => {
+    // 等主题确定再初始化，避免深色用户先以浅色挂载一次再重建
+    if (!theme) return
+
     let cancelled = false
     let instances: unknown
 
     loadPlayground()
       .then(() => {
         if (cancelled || !hostRef.current || !window.KotlinPlayground) return
-        // 让 playground 的配色跟随系统深色模式。这一步只在客户端发生，
-        // 且改的是 React 不参与 diff 的节点，因此不会影响 hydration。
-        const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches
-        if (prefersDark) {
-          hostRef.current.querySelector('code')?.setAttribute('theme', 'darcula')
-        }
         return window.KotlinPlayground(`.${instanceClass}`)
       })
       .then((result) => {
@@ -104,9 +111,12 @@ export function Runnable({
         }
       }
     }
-  }, [instanceClass])
+  }, [instanceClass, theme])
 
-  const attrs = highlightOnly ? ' data-highlight-only="nocursor"' : ''
+  const attrs = [
+    highlightOnly ? ' data-highlight-only="nocursor"' : '',
+    theme === 'dark' ? ' theme="darcula"' : '',
+  ].join('')
   const html = `<code class="kotlin-code ${instanceClass}"${attrs}>${escapeHtml(code.trimEnd())}</code>`
 
   return (
@@ -120,8 +130,13 @@ export function Runnable({
         用 dangerouslySetInnerHTML 把这块 DOM「交给」kotlin-playground：
         React 不会 diff 它的子节点，playground 可以放心地就地替换整个 <code>。
         服务端渲染出的内容与客户端首次渲染完全一致，不会有 hydration mismatch。
+
+        key 带上主题：切换配色时 playground 已经把这里的 DOM 换掉了，
+        没法就地改主题，只能让 React 丢弃整个容器、用干净的 <code> 重建，
+        上面的 effect 随之重新初始化（cleanup 会先销毁旧实例）。
       */}
       <div
+        key={theme ?? 'pending'}
         ref={hostRef}
         className="kotlin-runnable overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
         suppressHydrationWarning

@@ -1,8 +1,20 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
-:root {
-  color-scheme: light dark;
+/*
+  dark: 变体不再看 prefers-color-scheme，改为看 <html data-theme>。
+  该属性由 <head> 里的内联脚本在首屏绘制前写入（值永远是解析后的
+  light / dark），「跟随系统」的逻辑在 lib/theme.ts 里处理。
+*/
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* 让原生控件、滚动条也跟着切换 */
+[data-theme='light'] {
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 html {
@@ -50,10 +62,8 @@ body {
   font-size: 0.86em;
 }
 
-@media (prefers-color-scheme: dark) {
-  .prose :where(code):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
-    background: rgb(255 255 255 / 0.1);
-  }
+[data-theme='dark'] .prose :where(code):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
+  background: rgb(255 255 255 / 0.1);
 }
 
 /* Callout / Quiz 内部的富文本：让 MDX 段落在小容器里不要撑出多余间距 */
@@ -81,9 +91,7 @@ body {
   font-size: 0.85em;
 }
 
-@media (prefers-color-scheme: dark) {
-  .callout-body code,
-  .quiz-explanation code {
-    background: rgb(255 255 255 / 0.1);
-  }
+[data-theme='dark'] .callout-body code,
+[data-theme='dark'] .quiz-explanation code {
+  background: rgb(255 255 255 / 0.1);
 }

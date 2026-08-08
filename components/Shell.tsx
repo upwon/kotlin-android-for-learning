@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState, type ReactNode } from 'react'
 import Sidebar from '@/components/Sidebar'
+import ThemeToggle from '@/components/ThemeToggle'
 
 export function Shell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false)
@@ -34,14 +35,17 @@ export function Shell({ children }: { children: ReactNode }) {
           </span>
         </Link>
 
-        <a
-          href="https://kotlinlang.org/docs/home.html"
-          target="_blank"
-          rel="noreferrer"
-          className="ml-auto text-xs text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100"
-        >
-          官方文档 ↗
-        </a>
+        <div className="ml-auto flex items-center gap-3">
+          <a
+            href="https://kotlinlang.org/docs/home.html"
+            target="_blank"
+            rel="noreferrer"
+            className="hidden text-xs text-slate-500 hover:text-slate-800 sm:inline dark:text-slate-400 dark:hover:text-slate-100"
+          >
+            官方文档 ↗
+          </a>
+          <ThemeToggle />
+        </div>
       </header>
 
       <div className="mx-auto flex max-w-[100rem]">
