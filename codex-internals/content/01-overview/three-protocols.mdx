@@ -15,21 +15,18 @@
 
 <Diagram
   label="三条协议的位置"
-  caption="A 和 C 是 Codex 自己定的边界；B 是它同时站在两边的那条公共标准。"
-  art={`
-       前端（IDE / TUI / 桌面端）
-              │
-              │  A. app-server JSON-RPC        ← Codex 自己定义
-              ▼
-       ┌─────────────┐
-       │  app-server │
-       ├─────────────┤        B. MCP           ← 公开标准，双向
-       │  codex-core │ ◀──────────────────────▶  外部 MCP 服务器
-       └─────────────┘        （既当 client，也当 server）
-              │
-              │  C. Responses API              ← OpenAI 的模型接口
-              ▼
-            模型
+  caption="A 是 Codex 自己定义的；C 是 OpenAI 的模型接口；B 是公开标准，而且 Codex 在它上面是双向的——既连别人的工具，也把自己变成别人的工具。"
+  chart={`
+flowchart TB
+  FE["前端（IDE / TUI / 桌面端）"]
+  AS["app-server"]
+  CORE["codex-core"]
+  MCP["外部 MCP 服务器"]
+  MODEL["模型"]
+  FE -->|"A. app-server JSON-RPC（Codex 自己定义）"| AS
+  AS --> CORE
+  CORE <-->|"B. MCP（既当 client 也当 server）"| MCP
+  CORE -->|"C. Responses API"| MODEL
 `}
 />
 

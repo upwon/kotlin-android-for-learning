@@ -73,18 +73,21 @@ transport 被换成**内存 channel**，协议语义一个不少。
 
 <Diagram
   label="四种 transport 的位置"
-  caption="上面三种换的是「字节怎么进出」，最下面那种直接把字节这一层去掉了。"
-  art={`
-                     ┌──────────────────────────┐
-                     │   MessageProcessor       │  ← 语义在这里，四种都一样
-                     └────────────┬─────────────┘
-                                  │
-        ┌──────────────┬──────────┴──────┬──────────────────┐
-        ▼              ▼                 ▼                  ▼
-    stdio          websocket        unix socket        in-process
-    (JSONL)        (文本帧)         (Upgrade+帧)       (内存 channel)
-        │              │                 │                  │
-    IDE 扩展       实验性/不支持      daemon 控制面      TUI / codex exec
+  caption="前三种换的是「字节怎么进出」，最后那种直接把字节这一层去掉了。上面的 MessageProcessor 对四种一视同仁。"
+  chart={`
+flowchart TB
+  MP["MessageProcessor<br/>语义在这里，四种都一样"]
+  T1["stdio<br/>JSONL"]
+  T2["websocket<br/>实验性 / 不支持"]
+  T3["unix socket<br/>Upgrade + 文本帧"]
+  T4["in-process<br/>内存 channel"]
+  U1["IDE 扩展"]
+  U3["daemon 控制面"]
+  U4["TUI / codex exec"]
+  MP --- T1 --> U1
+  MP --- T2
+  MP --- T3 --> U3
+  MP --- T4 --> U4
 `}
 />
 

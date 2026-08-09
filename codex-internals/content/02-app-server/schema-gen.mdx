@@ -39,23 +39,20 @@ pub struct ThreadStartParams { /* … */ }
 <Diagram
   label="协议定义的派生关系"
   caption="所有语言的定义都是派生物。改协议只有一个地方能改。"
-  art={`
-                  Rust 类型（唯一真相）
-                  app-server-protocol/src/protocol/**
-                            │
-              ┌─────────────┼─────────────┐
-              ▼             ▼             ▼
-        serde 序列化   JsonSchema      TS 派生
-        （线上报文）        │             │
-                          ▼             ▼
-                  generate-json-schema  generate-ts
-                          │             │
-                          ▼             ▼
-                    JSON Schema      *.d.ts
-                          │             │
-                          └──────┬──────┘
-                                 ▼
-                      SDK / 第三方客户端 / 校验工具
+  chart={`
+flowchart TB
+  RUST["Rust 类型（唯一真相）<br/>app-server-protocol/src/protocol/**"]
+  SERDE["serde 序列化<br/>线上报文"]
+  JS["JsonSchema 派生"]
+  TSD["TS 派生"]
+  GJ["generate-json-schema"]
+  GT["generate-ts"]
+  OUT1["JSON Schema"]
+  OUT2["*.d.ts"]
+  CONS["SDK / 第三方客户端 / 校验工具"]
+  RUST --> SERDE
+  RUST --> JS --> GJ --> OUT1 --> CONS
+  RUST --> TSD --> GT --> OUT2 --> CONS
 `}
 />
 

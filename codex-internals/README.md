@@ -8,7 +8,7 @@ app-server 协议、codex-core 的 thread / turn 模型、工具与三平台沙�
 
 - 全站 **75 章**，覆盖 11 个部分 + 附录
 - 每章开头都有「**本章对应源码**」，链接钉在一个具体 commit 上，可以当场核对
-- 交互练习题、ASCII 架构图、构建期语法高亮（shiki 双主题，零运行时）
+- 交互练习题、Mermaid 架构图（跟随浅色 / 深色重绘）、构建期语法高亮（shiki 双主题，零运行时）
 
 ## 本地开发
 
@@ -32,7 +32,8 @@ components/
   Sidebar.tsx           章节树导航
   CodeBlock.tsx         代码块外壳（高亮本身在构建期由 shiki 完成）
   Source.tsx            Source / SourceMap：指向上游源码的链接
-  Diagram.tsx           ASCII 架构图
+  Diagram.tsx           架构图外壳（小标题 / 边框 / 图注 / 横向滚动）
+  Mermaid.tsx           Mermaid 渲染器：动态 import + 跟随主题重绘
   Quiz.tsx              交互练习题
   Callout.tsx           说明 / 技巧 / 易错 / 结论 / 设计取舍
 content/                MDX 内容，一章一文件
@@ -71,8 +72,9 @@ scripts/gen-content.mjs 章节大纲的单一数据源
 <Diagram
   label="数据流"
   caption="说明文字"
-  art={`
-TUI ──▶ app-server ──▶ core
+  chart={`
+flowchart LR
+  TUI["codex (TUI)"] --> AS["app-server"] --> CORE["codex-core"]
   `}
 />
 ```

@@ -138,38 +138,22 @@ let result: Result<Option<ClientResponsePayload>, JSONRPCErrorError> = match cod
 <Diagram
   label="一条请求的完整路径"
   caption="JSON 与类型化两条入口在 handle_client_request 汇合；排队与闸门在分发之前。"
-  art={`
-  stdio / ws / uds              in-process
-        │                            │
-        ▼                            ▼
-  process_request            process_client_request
-        │                            │
-  deserialize_client_request         │  （跳过 JSON）
-        │                            │
-        └─────────────┬──────────────┘
-                      ▼
-             handle_client_request
-                      │
-              serialization_scope()?
-                      │
-        ┌─────────────┴──────────────┐
-        │ Some(scope)                │ None
-        ▼                            ▼
-  keyed queue                  tokio::spawn
-  (Exclusive / SharedRead)      （完全并发）
-        └─────────────┬──────────────┘
-                      ▼
-              ConnectionRpcGate
-                      │
-                      ▼
-     handle_initialized_client_request
-              （137 分支 match）
-                      │
-                      ▼
-            request_processors/*
-                      │
-                      ▼
-              OutgoingMessage → 写线程
+  chart={`
+flowchart TB
+  A["stdio / ws / uds"] --> B["process_request"] --> C["deserialize_client_request"]
+  D["in-process 嵌入者"] --> E["process_client_request<br/>跳过 JSON"]
+  F["handle_client_request"]
+  C --> F
+  E --> F
+  F --> G{"serialization_scope()"}
+  G -->|"Some(scope)"| H["按 key 排队<br/>Exclusive / SharedRead"]
+  G -->|"None"| I["tokio::spawn<br/>完全并发"]
+  J["ConnectionRpcGate"]
+  H --> J
+  I --> J
+  J --> K["handle_initialized_client_request<br/>137 分支 match"]
+  K --> L["request_processors/*"]
+  L --> M["OutgoingMessage → 写线程"]
 `}
 />
 

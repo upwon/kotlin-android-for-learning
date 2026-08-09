@@ -39,26 +39,22 @@ app-server 运行时，然后像个普通客户端那样，用 JSON-RPC 的**语
 
 <Diagram
   label="进程与协议边界"
-  caption="虚线是进程边界。注意 TUI / exec 那两条：协议还在，只是 transport 换成了内存 channel。"
-  art={`
-   codex (TUI)              codex exec              IDE 扩展 / 桌面端
-        │                        │                          │
-        │  typed request         │  typed request           │  JSON over stdio
-        ▼                        ▼                          ▼
-  ┌───────────────────────────────────────┐        ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-  │      codex-app-server-client          │          进程边界
-  └───────────────────────────────────────┘        └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
-        │                                                   │
-        ▼                                                   ▼
-  ┌─────────────────────┐                        ┌─────────────────────┐
-  │  app-server (进程内) │                        │ app-server (独立进程)│
-  └─────────────────────┘                        └─────────────────────┘
-        │                                                   │
-        └────────────────────┬──────────────────────────────┘
-                             ▼
-                    ┌─────────────────┐
-                    │   codex-core    │
-                    └─────────────────┘
+  caption="注意左右两侧最终都落到同一个 codex-core。TUI / exec 那两条走的是进程内的 app-server：协议还在，只是 transport 换成了内存 channel。"
+  chart={`
+flowchart TB
+  TUI["codex (TUI)"]
+  EXEC["codex exec"]
+  IDE["IDE 扩展 / 桌面端"]
+  FACADE["codex-app-server-client"]
+  ASIN["app-server（进程内）"]
+  ASOUT["app-server（独立进程）"]
+  CORE["codex-core"]
+  TUI -->|"类型化 ClientRequest"| FACADE
+  EXEC -->|"类型化 ClientRequest"| FACADE
+  FACADE --> ASIN
+  IDE -->|"JSON over stdio（跨进程）"| ASOUT
+  ASIN --> CORE
+  ASOUT --> CORE
 `}
 />
 

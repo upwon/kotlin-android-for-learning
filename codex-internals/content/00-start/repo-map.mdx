@@ -26,31 +26,20 @@ codex/
 <Diagram
   label="crate 分层"
   caption="从上到下：越靠上越贴近用户，越靠下越贴近操作系统。跨层调用是有的，但方向基本单向。"
-  art={`
-┌────────────────────────────────────────────────────────────────────┐
-│ 入口     codex-cli(npm shim) · cli · arg0                          │
-├────────────────────────────────────────────────────────────────────┤
-│ 前端     tui · exec · cloud-tasks                                  │
-│          app-server-client ← 前端连内核的统一门面                   │
-├────────────────────────────────────────────────────────────────────┤
-│ 协议     app-server-protocol · protocol                            │
-│          exec-server-protocol · code-mode-protocol                 │
-├────────────────────────────────────────────────────────────────────┤
-│ 服务     app-server · app-server-transport · app-server-daemon     │
-├────────────────────────────────────────────────────────────────────┤
-│ 内核     core (31 万行) · core-api · config · state                │
-│          thread-store · rollout-trace · models-manager             │
-├────────────────────────────────────────────────────────────────────┤
-│ 执行与   exec-server · sandboxing · linux-sandbox                  │
-│ 安全     windows-sandbox-rs · execpolicy · network-proxy           │
-│          apply-patch · shell-command · shell-escalation            │
-├────────────────────────────────────────────────────────────────────┤
-│ 扩展     skills · hooks · plugin · core-plugins · connectors       │
-│          rmcp-client (当 MCP 客户端) · mcp-server (当 MCP 服务端)  │
-├────────────────────────────────────────────────────────────────────┤
-│ 基础     utils · async-utils · http-client · otel · analytics      │
-│ 设施     login · keyring-store · file-search · git-utils           │
-└────────────────────────────────────────────────────────────────────┘
+  chart={`
+flowchart TB
+  L1["入口<br/>codex-cli (npm shim) · cli · arg0"]
+  L2["前端<br/>tui · exec · cloud-tasks<br/>app-server-client（连内核的统一门面）"]
+  L3["协议<br/>app-server-protocol · protocol<br/>exec-server-protocol · code-mode-protocol"]
+  L4["服务<br/>app-server · app-server-transport · app-server-daemon"]
+  L5["内核<br/>core (31 万行) · core-api · config · state<br/>thread-store · rollout-trace · models-manager"]
+  L6["执行与安全<br/>exec-server · sandboxing · linux-sandbox<br/>windows-sandbox-rs · execpolicy · network-proxy<br/>apply-patch · shell-command · shell-escalation"]
+  L7["扩展<br/>skills · hooks · plugin · core-plugins · connectors<br/>rmcp-client（当 MCP 客户端）· mcp-server（当 MCP 服务端）"]
+  L8["基础设施<br/>utils · async-utils · http-client · otel · analytics<br/>login · keyring-store · file-search · git-utils"]
+  L1 --> L2 --> L3 --> L4 --> L5 --> L6
+  L5 --> L7
+  L6 --> L8
+  L7 --> L8
 `}
 />
 

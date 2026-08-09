@@ -9,27 +9,32 @@
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
 /* ---------------------------------------------------------------------------
-   主题色：砖红 terracotta（hue 38）。
+   主题色：微信绿（hue 151.2，取自 #07C160 的 OKLCH 色相）。
 
    全站不出现具体色名，一律走 accent-* 色阶，换主题色只需要替换这一段。
-   色阶按 Tailwind 的明度 / 彩度曲线生成：明度固定、彩度按档位缩放，
-   所以换色相不会改变任何一处的明暗关系与对比度。
+   明度曲线沿用 Tailwind 的档位，只换色相；彩度逐档取该色相下 sRGB 色域内
+   的可用值，所以换色不会改变任何一处的明暗关系。
 
-   选它的原因很实际：姊妹站（Kotlin）用的是墨青，两个站同时开着的时候
-   需要一眼能分清楚；而暖色配大面积代码块里的冷色高亮也不打架。
+   对比度（用 scripts 里的换算脚本核过）：
+     accent-600 / 白底      4.62   正文链接、主按钮，AA 及格
+     accent-700 / 白底      6.41
+     accent-400 / slate-950 8.49   深色下的正文链接
+
+   换色时要同步改三处：本段、app/icon.svg 里那个色值、
+   components/Mermaid.tsx 里的 PALETTE（mermaid 不认 oklch，那边是 hex）。
 --------------------------------------------------------------------------- */
 @theme {
-  --color-accent-50: oklch(0.971 0.01 38);
-  --color-accent-100: oklch(0.936 0.023 38);
-  --color-accent-200: oklch(0.885 0.043 38);
-  --color-accent-300: oklch(0.81 0.072 38);
-  --color-accent-400: oklch(0.715 0.109 38);
-  --color-accent-500: oklch(0.625 0.138 38);
-  --color-accent-600: oklch(0.545 0.145 38);
-  --color-accent-700: oklch(0.47 0.131 38);
-  --color-accent-800: oklch(0.405 0.107 38);
-  --color-accent-900: oklch(0.355 0.087 38);
-  --color-accent-950: oklch(0.245 0.058 38);
+  --color-accent-50: oklch(0.971 0.014 151.2);
+  --color-accent-100: oklch(0.936 0.032 151.2);
+  --color-accent-200: oklch(0.885 0.06 151.2);
+  --color-accent-300: oklch(0.81 0.1 151.2);
+  --color-accent-400: oklch(0.715 0.15 151.2);
+  --color-accent-500: oklch(0.625 0.168 151.2);
+  --color-accent-600: oklch(0.545 0.145 151.2);
+  --color-accent-700: oklch(0.47 0.126 151.2);
+  --color-accent-800: oklch(0.405 0.11 151.2);
+  --color-accent-900: oklch(0.355 0.096 151.2);
+  --color-accent-950: oklch(0.245 0.07 151.2);
 
   /*
     两个语义别名：浅色底上用 600，深色底上用 400。

@@ -89,7 +89,35 @@ export default function Home() {
       </section>
 
       <section className="mb-12">
-        <h2 className="mb-4 text-xl font-bold text-slate-900 dark:text-slate-50">你是哪一种读者</h2>
+        <h2 className="mb-4 text-xl font-bold text-slate-900 dark:text-slate-50">怎么读</h2>
+
+        {/*
+          术语表放在三条路线**之前**，是因为 Codex 的术语和别的 agent 框架对不上：
+          最典型的是 turn——别人说的 agent loop 在它里面。不先对齐，读哪一条路线都容易串。
+        */}
+        <Link
+          href="/docs/appendix/glossary"
+          className="group mb-3 flex flex-col gap-1 rounded-xl border border-accent-200 bg-accent-50/60 p-4 transition-colors hover:border-accent-400 sm:flex-row sm:items-center sm:gap-4 dark:border-accent-900 dark:bg-accent-950/25 dark:hover:border-accent-700"
+        >
+          <span className="shrink-0 rounded-md bg-accent-600 px-2 py-0.5 text-[0.7rem] font-semibold text-white">
+            先读这个
+          </span>
+          <span className="flex-1">
+            <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              术语表：turn 在 Codex 里不是「一次模型调用」
+            </span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+              Codex 的术语自成一套，和大多数 agent 框架对不上——别人叫 agent loop
+              的东西，在这里是<strong className="font-semibold">一个 turn 内部</strong>的事。
+              十分钟对齐，后面每一章都省事。
+            </span>
+          </span>
+          <span className="shrink-0 text-xs font-medium text-accent-700 dark:text-accent-400">
+            去看 →
+          </span>
+        </Link>
+
+        <p className="mb-3 mt-6 text-sm text-slate-500 dark:text-slate-400">对齐术语之后，按目的选一条：</p>
         <div className="grid gap-3 sm:grid-cols-3">
           {TRACKS.map((track) => (
             <Link

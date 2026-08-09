@@ -577,7 +577,9 @@ export const toc: Part[] = [
       {
         title: "术语表",
         slug: "appendix/glossary",
-        summary: "thread / turn / item / rollout / skill / hook … 一次讲清。",
+        summary: "先读这一页：Codex 的术语和别的 agent 框架对不上，尤其是 turn。",
+        deep: true,
+        star: true,
       },
       {
         title: "调试配方",

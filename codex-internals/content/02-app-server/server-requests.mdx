@@ -31,29 +31,19 @@ README 把消息顺序写得很明确，值得照抄一遍：
 <Diagram
   label="一次命令审批"
   caption="注意第 4 步：serverRequest/resolved 不只在用户回答后发，turn 被中断时的清理也发它。"
-  art={`
-  服务端                                          客户端
-    │                                               │
-    │ ①  item/started（notification）                │
-    │    commandExecution，带 command / cwd          │
-    │ ─────────────────────────────────────────────▶│  渲染出这条待批命令
-    │                                               │
-    │ ②  item/commandExecution/requestApproval      │
-    │    （request，有 id，等答复）                    │
-    │ ─────────────────────────────────────────────▶│  弹出审批对话框
-    │                                               │
-    │ ③  { "decision": "acceptForSession" }         │
-    │ ◀─────────────────────────────────────────────│  用户点了
-    │                                               │
-    │ ④  serverRequest/resolved                     │
-    │    { threadId, requestId }                    │
-    │ ─────────────────────────────────────────────▶│  关掉对话框
-    │                                               │
-    │    …执行…                                      │
-    │                                               │
-    │ ⑤  item/completed                             │
-    │    status: completed | failed | declined      │
-    │ ─────────────────────────────────────────────▶│  这条才是权威结果
+  chart={`
+sequenceDiagram
+  participant S as 服务端
+  participant C as 客户端
+  S->>C: ① item/started（notification）
+  Note right of C: 渲染出这条待批命令
+  S->>C: ② item/commandExecution/requestApproval（request）
+  Note right of C: 弹出审批对话框
+  C-->>S: ③ decision = acceptForSession
+  S->>C: ④ serverRequest/resolved
+  Note right of C: 关掉对话框
+  Note left of S: 执行命令
+  S->>C: ⑤ item/completed（带 status，权威结果）
 `}
 />
 

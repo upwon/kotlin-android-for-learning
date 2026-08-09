@@ -31,27 +31,16 @@ TUI 和内核在同一个进程里。最省事的做法是直接 `use codex_core
 
 <Diagram
   label="in-process 与跨进程的对照"
-  caption="虚线框里的东西是完全一样的代码。差别只在最上面那一层怎么把消息递进来。"
-  art={`
-   跨进程（IDE 扩展）                   进程内（TUI / codex exec）
-
-   ┌─────────────┐                     ┌─────────────────────┐
-   │  客户端进程  │                     │  codex 进程          │
-   └──────┬──────┘                     │  ┌───────────────┐  │
-          │ JSON over stdio            │  │ TUI / exec    │  │
-          ▼                            │  └───────┬───────┘  │
-   ┌─────────────┐                     │          │ 类型化    │
-   │ 反序列化     │                     │          │ ClientRequest
-   └──────┬──────┘                     │          ▼          │
-          │                            │  ┌───────────────┐  │
-          │                            │  │ 内存 channel  │  │
-          ▼                            │  └───────┬───────┘  │
-  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─┐
-  │        handle_client_request  ←──────────────┘           │
-  │        MessageProcessor                                  │
-  │        request_processors                                │
-  │        codex-core                                        │
-  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘
+  caption="框里的东西是完全一样的代码。差别只在最上面那一层怎么把消息递进来：一边是 JSON 字符串，一边是类型化的值。"
+  chart={`
+flowchart TB
+  C1["客户端进程"] -->|"JSON over stdio"| C2["反序列化"]
+  D1["TUI / exec"] -->|"类型化 ClientRequest"| D2["内存 channel"]
+  subgraph S["同一份实现（进程内与跨进程共享）"]
+    S1["handle_client_request"] --> S2["MessageProcessor"] --> S3["request_processors"] --> S4["codex-core"]
+  end
+  C2 --> S1
+  D2 --> S1
 `}
 />
 

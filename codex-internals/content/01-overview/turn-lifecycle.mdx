@@ -31,46 +31,30 @@
 
 <Diagram
   label="一次 turn 的端到端路径"
-  caption="① ② 在前端与协议层，③ ④ ⑤ 在内核。虚线是反向请求——审批这条路是从内核一路回到前端的。"
-  art={`
-  ①  前端                     ②  app-server              ③  core: 组装 + 采样
- ┌──────────┐  turn/start   ┌──────────────┐  submit   ┌────────────────────┐
- │ TUI/IDE  │ ────────────▶ │ turn_processor│ ───────▶ │ run_turn 循环开始   │
- └──────────┘               └──────────────┘           │  context_manager    │
-      ▲                            ▲                   │  + prompts/AGENTS   │
-      │                            │                   │  + skills           │
-      │  ServerNotification        │                   └──────────┬─────────┘
-      │  item/started              │                              │
-      │  item/…/delta              │                              ▼
-      │  turn/completed            │                    ┌────────────────────┐
-      │                            │                    │ client.rs          │
-      │                            │                    │ → Responses API    │
-      │                            │                    │ ← SSE 流式事件      │
-      │                            │                    └──────────┬─────────┘
-      │                            │                               │
-      │                            │            ┌──────────────────┴──────┐
-      │                            │            │ 模型要求调工具？          │
-      │                            │            └────┬───────────────┬─────┘
-      │                            │              是 │            否 │
-      │                            │                 ▼               ▼
-      │                            │      ④ tools: router      turn 结束
-      │                            │         orchestrator          │
-      │                            │              │                │
-      │                            │              ▼                │
-      │                            │         safety.rs             │
-      │                            │        ┌─────┴─────┐          │
-      │  ◀ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┼ ─ ─ ─ ─│ 需要审批？ │          │
-      │    ServerRequest（反向）    │        └─────┬─────┘          │
-      │    requestApproval         │              ▼                │
-      │                            │        sandbox 执行            │
-      │                            │              │                │
-      │                            │              └──▶ 结果回灌上下文 │
-      │                            │                   回到 ③ 再采样 │
-      │                            │                               │
-      └────────────────────────────┴───────────────────────────────┘
-                                   │
-                                   ▼  ⑤ 全程持续
-                            rollout 落盘 / thread-store
+  caption="① ② 在前端与协议层，③ ④ ⑤ 在内核。实线是主链路，虚线是旁路（事件推送与落盘）。注意 ③ ↔ ④ 之间那个回环：一个 turn 会在这里转很多圈。"
+  chart={`
+flowchart TB
+  FE["① 前端<br/>turn/start"]
+  TP["② app-server<br/>turn_processor"]
+  BUILD["③ core 组装 prompt<br/>context_manager + AGENTS.md + skills<br/>+ 本轮工具列表"]
+  MODEL["client.rs → Responses API<br/>← SSE 流式事件"]
+  Q{"模型要求调工具？"}
+  ROUTE["④ router / orchestrator"]
+  SAFE{"safety.rs 判定"}
+  APPROVE["反向请求<br/>requestApproval → 前端 → 用户"]
+  SANDBOX["沙箱执行"]
+  FEED["结果回灌上下文"]
+  DONE["turn/completed"]
+  ROLLOUT["⑤ rollout 落盘 / thread-store"]
+  FE --> TP --> BUILD --> MODEL --> Q
+  Q -->|"否"| DONE
+  Q -->|"是"| ROUTE --> SAFE
+  SAFE -->|"需要审批"| APPROVE --> SANDBOX
+  SAFE -->|"直接跑 / 进沙箱"| SANDBOX
+  SANDBOX --> FEED --> BUILD
+  MODEL -.->|"item/* 事件流"| FE
+  DONE -.-> FE
+  BUILD -.-> ROLLOUT
 `}
 />
 

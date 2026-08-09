@@ -18,19 +18,23 @@
 <Diagram
   label="三层包含关系"
   caption="thread 持久、turn 短暂、item 可展示。三者的生命周期完全不同。"
-  art={`
-  thread  (持久 · 有 id · 可 resume / fork / archive)
-    │
-    ├── turn 1  (一次「用户说话 → agent 干完活」的往返)
-    │     ├── item: userMessage
-    │     ├── item: reasoning
-    │     ├── item: commandExecution
-    │     ├── item: fileChange
-    │     └── item: agentMessage
-    │
-    ├── turn 2
-    │     └── …
-    └── …
+  chart={`
+flowchart TB
+  T["thread<br/>持久 · 有 id · 可 resume / fork / archive"]
+  U1["turn 1"]
+  U2["turn 2"]
+  I1["item: userMessage"]
+  I2["item: reasoning"]
+  I3["item: commandExecution"]
+  I4["item: fileChange"]
+  I5["item: agentMessage"]
+  T --> U1
+  T --> U2
+  U1 --> I1
+  U1 --> I2
+  U1 --> I3
+  U1 --> I4
+  U1 --> I5
 `}
 />
 

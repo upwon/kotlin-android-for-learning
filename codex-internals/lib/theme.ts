@@ -57,6 +57,25 @@ export function currentResolvedTheme(): ResolvedTheme {
   return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
 }
 
+/**
+ * 订阅 <html data-theme> 的变化。
+ *
+ * 用 MutationObserver 而不是自建事件总线，这样任何改这个属性的代码
+ * 都能被感知到。Mermaid 图靠它在切换配色时重新渲染——SVG 是一次性生成的，
+ * 颜色写死在里面，没法靠 CSS 变量跟着变。
+ */
+export function subscribeToTheme(callback: (theme: ResolvedTheme) => void): () => void {
+  if (typeof document === 'undefined') return () => {}
+
+  const observer = new MutationObserver(() => callback(currentResolvedTheme()))
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  })
+
+  return () => observer.disconnect()
+}
+
 /** 偏好为 system 时，跟随系统设置的实时变化 */
 export function subscribeToSystemTheme(callback: () => void): () => void {
   if (typeof window === 'undefined') return () => {}

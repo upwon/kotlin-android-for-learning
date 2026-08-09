@@ -54,6 +54,24 @@
 
 带 ⭐ 的是重点章节。如果时间有限，只读带星的那二十来章，也能拿到这个仓库八成的设计意图。
 
+## 第一步：先对齐术语
+
+<Callout type="warn" title="不管你走哪条路线，先花十分钟读术语表">
+
+Codex 的术语**和大多数 agent 框架对不上**，而且是那种「看起来懂了、其实理解偏了」的对不上。
+
+最典型的是 **turn**。别的框架把「模型输出 → 调工具 → 结果喂回去 → 再问模型」
+这个循环叫 *agent loop*；在 Codex 里，**这整个循环发生在一个 turn 内部**。
+一个 turn 的边界是**用户**：一次用户输入 → agent 干完活，中间采样几次都算同一个 turn。
+
+所以「这个 turn 跑了 4 轮」在 Codex 语境里是句病句——应该说
+「这个 turn 里采样了 4 次」。类似的还有 item ≠ message、rollout 是权威真相、
+execpolicy 和 sandbox 是两回事……
+
+→ [附录 · 术语表](/docs/appendix/glossary)
+
+</Callout>
+
 ## 三条推荐路线
 
 <Callout type="tip" title="按目的选起点，别按目录顺序读">

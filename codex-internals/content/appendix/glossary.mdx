@@ -1,23 +1,180 @@
 <SourceMap
   entries={[
-    { path: "codex-rs/protocol/src", note: "术语的权威定义都在类型里", dir: true },
+    { path: 'codex-rs/protocol/src', note: '术语的权威定义都在类型里', dir: true },
+    { path: 'codex-rs/app-server/README.md', note: 'Core Primitives 一节' },
+    { path: 'codex-rs/app-server-protocol/src/protocol/v2', note: '对外协议里的命名', dir: true },
   ]}
 />
 
-## 学习提纲
+<Callout type="warn" title="先读这一页">
 
-- 会话相关
-- 执行相关
-- 扩展相关
-- 容易混淆的几组
-
-<Callout type="note" title="这一章还是骨架">
-
-正文尚未写完。上面的「本章对应源码」已经是可用的：按顺序打开那几个文件，
-配合提纲自己读一遍，比等这里写完更快。
+Codex 的术语自成一套，**和大多数 agent 框架对不上**。同一个词在两边指不同的东西，
+不同的词在两边指同一个东西——不先对齐，后面读什么都容易串。
 
 </Callout>
 
+## 最容易踩的一个：turn ≠ 一次模型调用
+
+很多 agent 框架把「模型输出 → 调工具 → 把结果喂回去 → 再问模型」这个循环叫
+**agent loop**（或 iteration、step、cycle）。
+
+在 Codex 里，**这整个循环发生在一个 turn 内部**。
+
+<Diagram
+  label="turn 与「loop」的关系"
+  caption="别的框架说「跑了 4 轮 loop」，在 Codex 里是「一个 turn 里采样了 4 次」。turn 的边界是用户，不是模型。"
+  chart={`
+flowchart TB
+  U["用户说一句话"] --> T
+  subgraph T["一个 turn"]
+    S1["采样 1 → 要求调 shell"] --> E1["执行 → 回灌"]
+    E1 --> S2["采样 2 → 要求调 shell"] --> E2["执行 → 回灌"]
+    E2 --> S3["采样 3 → 要求 apply_patch"] --> E3["审批 → 执行 → 回灌"]
+    E3 --> S4["采样 4 → 只回了一段助手消息"]
+  end
+  T --> D["turn/completed"]
+`}
+/>
+
+一个 turn 的定义是**「一次用户输入 → agent 干完活」**：
+
+> **Turn**: One turn of the conversation, typically starting with a user message and finishing with
+> an agent message.
+
+所以：
+
+- 「这个 turn 跑了多久」= 用户等了多久，不是一次 API 调用的耗时；
+- 「turn 失败了」不等于某次模型调用失败——中间失败可能被重试掉了；
+- `turn/interrupt` 打断的是整个循环，不是某一次采样。
+
+<Callout type="success" title="记住这一条就够本了">
+
+**turn 的边界由用户划定，不由模型划定。** 模型愿意调几次工具，都在同一个 turn 里。
+
+</Callout>
+
+## 三个核心名词
+
+| 术语 | 是什么 | 别处常见的叫法 |
+| --- | --- | --- |
+| **thread** | 一整条会话。有 id、落盘、可恢复可分叉 | session、conversation、chat |
+| **turn** | 一次「用户说话 → agent 干完」的往返 | 这一层别处常常**没有名字**；里面的循环叫 loop / iteration |
+| **item** | turn 里最小的可展示单元 | message、event、block、content part |
+
+item 的类型包括：用户消息、agent 消息、推理、命令执行、文件改动、MCP 工具调用、计划……
+注意 **item 不等于 message**——一次命令执行也是一个 item，它在别的框架里可能是
+「tool_use + tool_result 两条消息」。
+
+## 对照表：同一个东西，两种叫法
+
+| Codex 说 | 别处常说 | 差在哪 |
+| --- | --- | --- |
+| turn | （无对应）+ agent loop | Codex 把「用户可感知的一轮」单独命名了 |
+| 一次 sampling / model request | LLM call、completion | 一个 turn 内会发生多次 |
+| item | message / event | item 更粗，一次命令执行是一个 item |
+| rollout | transcript、history file、session log | rollout 是**权威真相**，内存里的是缓存 |
+| compact | compaction、summarization、context pruning | Codex 有本地与远端两条压缩路径 |
+| steer | interrupt-and-inject、user interjection | turn 还在跑时往输入队列塞内容 |
+| approval | permission prompt、confirmation | 在 Codex 里是协议级的**反向请求**，不是 UI 弹窗 |
+| skill | 提示词模板、prompt pack | 按需注入的提示词 + 附带资源，不是代码扩展 |
+| hook | lifecycle callback、middleware | 跑在内核进程之外，失败必须可降级 |
+| plugin | extension | 比 skill 重，能带代码与 MCP 服务器 |
+| connector | data source、integration | 面向「数据源」 |
+| app | —— | 面向「可交互的东西」，能被 turn 直接调用 |
+| environment | runtime、executor、sandbox host | 命令与文件操作实际发生的地方，可以在远端 |
+| code-mode | code execution as tool-use | 让模型写代码来调工具，而不是连发 tool call |
+
+## 容易混淆的几组
+
+### app-server ≠ MCP server
+
+- **app-server** —— Codex 自己定义的 JSON-RPC 协议，前端（IDE / TUI / 桌面端）连它；
+- **mcp-server** —— Codex 把**自己**暴露成别人的 MCP 工具；
+- **rmcp-client** —— Codex 当 MCP 客户端，去连**别人的**工具。
+
+三者都带 "server/client"，但方向完全不同。详见 1.3。
+
+### `protocol` ≠ `app-server-protocol`
+
+- `codex-rs/app-server-protocol` —— **对外**协议，IDE 扩展要读的是这个；
+- `codex-rs/protocol` —— **内核内部**的类型（`Event`、`Op`、`items`）。
+
+### sandbox ≠ approval
+
+这是两个**正交**的维度：
+
+- **SandboxPolicy** —— 进程能碰什么（只读 / 工作区可写 / 完全放开）；
+- **AskForApproval** —— 什么时候要问人。
+
+组合起来才是最终策略。还有一条兜底规则：**沙箱起不来时会降级为问人**。见 5.1、5.7。
+
+### execpolicy ≠ sandbox
+
+- **execpolicy** —— 命令**跑之前**的规则判定（Starlark 写的白名单，见 5.5）；
+- **sandbox** —— 命令**跑起来之后**的操作系统级约束。
+
+前者是「该不该跑」，后者是「跑起来能干什么」。
+
+### thread 加载 ≠ thread 存在
+
+`thread/list` 列出的是**存过的** thread，它们的 `status` 默认是 `notLoaded`。
+只有 `thread/start` / `resume` / `fork` 会把它加载进内存并订阅事件。见 2.4。
+
+## 一组只在 Codex 出现的词
+
+| 术语 | 含义 |
+| --- | --- |
+| **rollout** | 会话的落盘记录。`resume` / `fork` / 回放都靠它 |
+| **ephemeral thread** | 只在内存里、不落盘的 thread（`thread.path` 为 `null`） |
+| **arg0 多态** | 同一个二进制按启动名切换角色（沙箱助手、代理、中继） |
+| **in-process app-server** | 前端在自己进程里跑一个 app-server，用内存 channel 代替 stdio |
+| **serialization scope** | 协议声明里写的并发排队 key（按 thread / 按进程句柄 / 全局） |
+| **elicitation** | 下游 MCP 服务器要向最终用户提问，需要一路透传上来 |
+| **guardian** | 安全侧的一组检查（`ext/guardian`、`guardianWarning` 通知） |
+
+<Quiz
+  question="一次对话里，用户问了一个问题，Codex 连续跑了 5 条命令才回答。这在 Codex 的术语里是？"
+  type="single"
+  options={[
+    '5 个 turn',
+    '1 个 turn，里面有多次采样与工具调用',
+    '1 个 thread，5 个 turn',
+    '5 个 item，1 个 turn，取决于命令数',
+  ]}
+  answer={1}
+>
+
+turn 的边界是**用户输入**：一次用户提问 → agent 干完活 = 一个 turn。
+中间不管采样几次、调几个工具，都在这一个 turn 内。
+
+D 有一半是对的（确实会产生多个 item），但问的是「这是几个 turn」——答案是一个。
+
+如果换成别的框架的说法，这叫「agent loop 跑了 6 轮」，而 Codex 会说
+「这个 turn 里采样了 6 次」。
+
+</Quiz>
+
+<Quiz
+  question="下面哪些配对是错的？"
+  type="multi"
+  options={[
+    'app-server 就是 Codex 实现的 MCP server',
+    'codex-rs/protocol 是 IDE 扩展需要读的协议定义',
+    'execpolicy 是操作系统级的沙箱',
+    'rollout 是会话的落盘记录，resume 靠它',
+  ]}
+  answer={[0, 1, 2]}
+>
+
+- **A 错**：app-server 是 Codex 自己定义的 JSON-RPC 协议；`mcp-server` 才是把 Codex
+  暴露成 MCP 工具的那一个。
+- **B 错**：IDE 扩展要读 `app-server-protocol`；不带前缀的 `protocol` 是内核内部类型。
+- **C 错**：execpolicy 是命令跑之前的**规则判定**，沙箱是跑起来之后的**系统级约束**。
+- **D 对**。
+
+</Quiz>
+
 ## 一句话结论
 
-Codex 的术语相当自洽，但和别的 agent 框架不完全对得上。
+Codex 的术语相当自洽，但和别的 agent 框架不完全对得上——尤其是 **turn**：
+它是「用户可感知的一轮」，别人说的 agent loop 在它**里面**。

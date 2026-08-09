@@ -1476,12 +1476,14 @@ const parts = [
       {
         title: '术语表',
         slug: 'glossary',
-        summary: 'thread / turn / item / rollout / skill / hook … 一次讲清。',
+        summary: '先读这一页：Codex 的术语和别的 agent 框架对不上，尤其是 turn。',
         outline: ['会话相关', '执行相关', '扩展相关', '容易混淆的几组'],
         takeaway: 'Codex 的术语相当自洽，但和别的 agent 框架不完全对得上。',
         sources: [
           { path: 'codex-rs/protocol/src', note: '术语的权威定义都在类型里', dir: true },
         ],
+        deep: true,
+        star: true,
       },
       {
         title: '调试配方',
